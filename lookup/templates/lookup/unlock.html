@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Unlock | {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-sm-8 col-md-5 col-lg-4">
+        <form method="post" action="{% url 'unlock' %}" class="card card-body">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next }}">
+            <label for="password" class="form-label">Password</label>
+            <input type="password" name="password" id="password" required autofocus
+                autocomplete="current-password"
+                class="form-control{% if error %} is-invalid{% endif %}">
+            {% if error %}
+            <div class="invalid-feedback">{{ error }}</div>
+            {% endif %}
+            <button type="submit" class="btn btn-dark mt-3">Unlock</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

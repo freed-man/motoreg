@@ -1,0 +1,42 @@
+body {
+    background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.navbar-brand {
+    font-size: 1.8rem;
+    font-weight: 700;
+}
+
+footer {
+    margin-top: auto;
+}
+
+.raw-data summary {
+    cursor: pointer;
+}
+
+.raw-data pre {
+    max-height: 70vh;
+    overflow: auto;
+}
+
+/* Mobile responsive fixes */
+@media (max-width: 768px) {
+    /* Vehicle details: center the title and make logo */
+    .card-title {
+        text-align: center;
+    }
+    .d-flex.align-items-center.mb-2 {
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    /* Reduce top margins on mobile */
+    .container.mt-5 {
+        margin-top: 1.5rem !important;
+    }
+    .container.mt-1 {
+        margin-top: 0.5rem !important;
+    }
+}

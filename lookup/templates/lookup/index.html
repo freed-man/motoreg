@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<style>
+    .hero-container {
+        position: relative;
+        display: inline-block;
+        max-width: 650px;
+        width: 100%;
+        container-type: inline-size;
+    }
+    .hero-container img {
+        width: 100%;
+        height: auto;
+    }
+    .plate-input-wrapper {
+        position: absolute;
+        top: 66.5%;
+        left: 39%;
+        width: 32.1%;
+        height: 14.7%;
+        overflow: hidden;
+        cursor: text;
+    }
+    .plate-display {
+        white-space: nowrap;
+        pointer-events: none;
+        position: absolute;
+        left: 2%;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+    .plate-text {
+        font-family: 'Arial Black', sans-serif;
+        font-weight: 900;
+        text-transform: uppercase;
+    }
+    .plate-text.hint {
+        font-size: 3cqi;
+        color: #333;
+    }
+    .plate-input {
+        width: 100%;
+        height: 100%;
+        border: none;
+        background: transparent;
+        font-family: 'Arial Black', sans-serif;
+        font-size: 5cqi;
+        font-weight: 900;
+        letter-spacing: 0.4cqi;
+        text-transform: uppercase;
+        text-align: center;
+        outline: none;
+        color: #000;
+        padding: 0 2%;
+        line-height: 1;
+        position: absolute;
+        top: 0;
+        left: 0;
+        box-sizing: border-box;
+    }
+    .plate-input:-webkit-autofill,
+    .plate-input:-webkit-autofill:hover,
+    .plate-input:-webkit-autofill:focus {
+        -webkit-box-shadow: 0 0 0 1000px white inset !important;
+        -webkit-text-fill-color: #000 !important;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-1">
+    <div class="row justify-content-center text-center">
+        <div class="col-md-8">
+            <h1 class="visually-hidden">{{ SITE_NAME }}</h1>
+            <p class="lead mb-3">Enter a registration to see its tax, MOT history and vehicle details.</p>
+            {% if error %}
+            <div class="alert alert-danger" role="alert">{{ error }}</div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="row justify-content-center">
+        <div class="col-md-8 text-center">
+            <form method="get" action="{% url 'lookup' %}" id="lookup-form">
+                <div class="hero-container mx-auto">
+                    <img src="{% static 'images/car.webp' %}" alt="" width="1304" height="726">
+                    <div class="plate-input-wrapper" id="plate-wrapper">
+                        <div class="plate-display" id="hint-display">
+                            <span id="hint-text" class="plate-text hint"></span>
+                        </div>
+                        <input type="text" class="plate-input" id="reg-input" name="reg"
+                            value="{{ reg|default:'' }}" maxlength="10" autocomplete="off"
+                            autocapitalize="characters" autocorrect="off" spellcheck="false"
+                            enterkeyhint="search" aria-label="Registration number"
+                            {% if error %}autofocus{% endif %}>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <button type="submit" class="btn btn-dark btn-lg">
+                        <i class="fas fa-search"></i> Look Up
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    var hintDisplay = document.getElementById('hint-display');
+    var hintText = document.getElementById('hint-text');
+    var regInput = document.getElementById('reg-input');
+    var lookupForm = document.getElementById('lookup-form');
+
+    var text = 'TYPE YOUR REGISTRATION HERE...';
+    var pi = 0;
+    var pDeleting = false;
+    var plateActive = true;
+    var hintTimer = null;
+
+    function scrollHint() {
+        var wrapperWidth = document.getElementById('plate-wrapper').offsetWidth;
+        var displayWidth = hintDisplay.offsetWidth;
+        var padding = wrapperWidth * 0.02;
+        if (displayWidth > wrapperWidth - (padding * 2)) {
+            hintDisplay.style.left = (wrapperWidth - displayWidth - padding) + 'px';
+        } else {
+            hintDisplay.style.left = padding + 'px';
+        }
+    }
+
+    function typePlate() {
+        if (!plateActive) return;
+        if (!pDeleting) {
+            hintText.textContent = text.substring(0, pi);
+            pi++;
+            scrollHint();
+            if (pi > text.length) {
+                hintTimer = setTimeout(function() { pDeleting = true; typePlate(); }, 2000);
+                return;
+            }
+            hintTimer = setTimeout(typePlate, 100);
+        } else {
+            hintText.textContent = text.substring(0, pi);
+            pi--;
+            scrollHint();
+            if (pi < 0) {
+                pDeleting = false;
+                pi = 0;
+                hintTimer = setTimeout(typePlate, 500);
+                return;
+            }
+            hintTimer = setTimeout(typePlate, 40);
+        }
+    }
+
+    function stopHint() {
+        plateActive = false;
+        clearTimeout(hintTimer);
+        hintDisplay.style.display = 'none';
+    }
+
+    // a reg handed back after an error is already on the plate
+    if (regInput.value !== '' || document.activeElement === regInput) {
+        stopHint();
+    } else {
+        typePlate();
+    }
+
+    regInput.addEventListener('focus', stopHint);
+
+    regInput.addEventListener('blur', function() {
+        if (regInput.value === '') {
+            hintDisplay.style.display = '';
+            plateActive = true;
+            pi = 0;
+            pDeleting = false;
+            typePlate();
+        }
+    });
+
+    // no spaces or symbols on the plate, and 7 characters at most
+    // (pasting "AB12 CDE" still works)
+    regInput.addEventListener('input', function() {
+        var cleaned = regInput.value.replace(/[^a-z0-9]/gi, '').slice(0, 7);
+        if (cleaned !== regInput.value) {
+            regInput.value = cleaned;
+        }
+    });
+
+    lookupForm.addEventListener('submit', function(e) {
+        if (regInput.value.trim() === '') {
+            e.preventDefault();
+            regInput.focus();
+        }
+    });
+</script>
+{% endblock %}

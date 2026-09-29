@@ -98,9 +98,15 @@ def get_annual_tax(co2, fuel_type, reg_year, reg_month, engine_cc=None):
 
         return result
 
-    # 2001-2017
-    if reg_year >= 2001:
+    # 1 March 2001 to 31 March 2017 (earlier 2001 registrations go by
+    # engine size, like pre-2001 cars)
+    if reg_year > 2001 or (reg_year == 2001 and not (reg_month and reg_month < 3)):
         if co2 is not None:
+            # Band K also covers cars over 225g/km registered before
+            # 23 March 2006. Only the month is known, so March 2006 counts
+            # as after.
+            if co2 > 225 and (reg_year, reg_month or 12) < (2006, 3):
+                co2 = 225
             bands = 'ABCDEFGHIJKLM'
             found = False
             for i, (threshold, annual, six_month) in enumerate(RATES_2001_2017):

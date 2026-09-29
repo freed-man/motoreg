@@ -8,9 +8,10 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
 from .details import (
-    NO_MOT_HISTORY, build_details, countdown_text, lez_verdict, span_text,
+    NO_MOT_HISTORY, build_details, countdown_text, span_text, ulez_verdict,
 )
 from .services import Result, fetch_dvla, fetch_lez, fetch_mot, fetch_vehicle
+from .tax_rates import get_annual_tax
 from .views import REG_PATTERN, clean_reg
 
 TODAY = date(2026, 9, 29)
@@ -171,7 +172,7 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'Tyre worn close to legal limit')
         self.assertContains(response, 'est. annual tax: £35')
         self.assertContains(response, 'Raw API response')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=1)
         self.assertContains(response, '<span class="text-success">Compliant</span>')
         self.assertNotContains(response, 'Save to Profile')
         self.assertNotContains(response, 'Browse Services')
@@ -204,21 +205,22 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, NO_MOT_HISTORY)
         self.assertContains(response, 'alert-info')
 
-    def test_lez_not_compliant(self, fetch):
+    def test_ulez_not_compliant(self, fetch):
         fetch.return_value = (
             Result('ok', DVLA), Result('ok', MOT), Result('ok', dict(LEZ_OK, s='n')))
         response = self.client.get('/AB12CDE')
         self.assertContains(
             response, '<span class="text-danger">Not compliant</span>')
 
-    def test_lez_unavailable_falls_back_to_link(self, fetch):
+    def test_ulez_unavailable_falls_back_to_tfl(self, fetch):
         fetch.return_value = (
             Result('ok', DVLA), Result('ok', MOT), Result('error', None))
         response = self.client.get('/AB12CDE')
         self.assertContains(
-            response, 'href="https://vehicleemissionscheck.service.gov.scot/"')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=3)
-        self.assertContains(response, 'the Scottish checker didn')
+            response, 'href="https://tfl.gov.uk/modes/driving/check-your-vehicle/"')
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
+        self.assertContains(response, 'emissions checker didn')
+        self.assertNotContains(response, 'LEZ (Scotland)')
 
 
 class DetailsTests(SimpleTestCase):
@@ -307,31 +309,23 @@ class DetailsTests(SimpleTestCase):
         self.assertIn('"taxDueDate": "2027-03-01"', context['raw_json'])
         self.assertNotIn('Formatted', context['raw_json'])
 
-    def test_lez_verdicts(self):
-        def verdict(**changes):
-            return lez_verdict(dict(LEZ_OK, **changes), TODAY)
-        self.assertEqual(verdict(), 'compliant')
-        self.assertEqual(verdict(s='e'), 'exempt')
-        self.assertEqual(verdict(s='n'), 'not_compliant')
-        self.assertEqual(verdict(s='n', vehicleType='MOTORCYCLE'), 'compliant')
-        # 30+ years old is historic, going by the earlier of the two dates
-        self.assertEqual(
-            verdict(s='n', dateOfFirstRegistration='1990-05-01'), 'exempt')
-        self.assertEqual(verdict(s='n', dateOfManufacture='1995-01-10',
-                                 dateOfFirstRegistration='1999-06-01'), 'exempt')
-        self.assertEqual(verdict(s='n', dateOfManufacture='2001-01-10',
-                                 dateOfFirstRegistration='1996-09-30'),
-                         'not_compliant')
+    def test_ulez_verdicts(self):
+        self.assertEqual(ulez_verdict(LEZ_OK), 'compliant')
+        self.assertEqual(ulez_verdict(dict(LEZ_OK, s='n')), 'not_compliant')
+        for status in ('e', 'u', 'x'):
+            self.assertEqual(ulez_verdict(dict(LEZ_OK, s=status)), '')
 
-    def test_lez_answer_or_reason(self):
-        self.assertEqual(self.details()['lez_verdict'], '')
+    def test_ulez_answer_or_reason(self):
+        self.assertEqual(self.details()['ulez_verdict'], '')
         context = build_details(DVLA, MOT, lez=dict(LEZ_OK, s='n'),
                                 lez_status='ok', today=TODAY)
         self.assertEqual(
-            (context['lez_verdict'], context['lez_notice']), ('not_compliant', ''))
+            (context['ulez_verdict'], context['ulez_notice']), ('not_compliant', ''))
+        context = build_details(DVLA, MOT, lez=dict(LEZ_OK, s='e'),
+                                lez_status='ok', today=TODAY)
+        self.assertEqual(context['ulez_notice'], 'no automatic answer for this vehicle')
         context = build_details(DVLA, MOT, lez_status='busy', today=TODAY)
-        self.assertEqual(context['lez_verdict'], '')
-        self.assertIn('at capacity', context['lez_notice'])
+        self.assertIn('busy', context['ulez_notice'])
         self.assertIn('"lez_scotland": null', context['raw_json'])
 
 
@@ -440,6 +434,33 @@ class ServiceTests(SimpleTestCase):
                 self.assertEqual(fetch_lez('AB12CDE').status, 'error')
             post.side_effect = requests.Timeout
             self.assertEqual(fetch_lez('AB12CDE').status, 'error')
+
+
+class TaxTests(SimpleTestCase):
+    """Spot checks against GOV.UK's 2026/27 tables."""
+
+    def test_post_2017_standard_rate(self):
+        tax = get_annual_tax(120, 'PETROL', 2019, 6, 1498)
+        self.assertEqual((tax['annual_rate'], tax['six_month_rate']), (200, 110))
+
+    def test_2001_to_2017_bands(self):
+        self.assertEqual(get_annual_tax(119, 'DIESEL', 2015, 3, 1968)['annual_rate'], 35)
+        self.assertEqual(get_annual_tax(0, 'ELECTRICITY', 2014, 5, None)['annual_rate'], 20)
+        tax = get_annual_tax(300, 'PETROL', 2010, 1, 4000)
+        self.assertEqual((tax['band'], tax['annual_rate'], tax['six_month_rate']), ('M', 790, 434.50))
+
+    def test_band_k_covers_big_engines_before_march_2006(self):
+        tax = get_annual_tax(290, 'PETROL', 2005, 11, 3200)
+        self.assertEqual((tax['band'], tax['annual_rate']), ('K', 445))
+        self.assertEqual(get_annual_tax(290, 'PETROL', 2006, 4, 3200)['band'], 'M')
+
+    def test_early_2001_goes_by_engine_size(self):
+        self.assertEqual(get_annual_tax(180, 'PETROL', 2001, 2, 1800)['annual_rate'], 375)
+        self.assertEqual(get_annual_tax(180, 'PETROL', 2001, 3, 1800)['band'], 'I')
+
+    def test_pre_2001_engine_size(self):
+        self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1400)['annual_rate'], 230)
+        self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1796)['annual_rate'], 375)
 
 
 class PasswordGateTests(SimpleTestCase):

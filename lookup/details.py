@@ -44,11 +44,12 @@ MOT_PROBLEMS = {
 }
 
 
-# Shown with a link to the checker when there's no LEZ answer
-LEZ_NOTICES = {
-    'not_found': "the Scottish checker doesn't recognise this reg",
-    'busy': 'the Scottish checker is at capacity, try again shortly',
-    'error': "the Scottish checker didn't answer",
+# Shown with a link to TfL when there's no automatic ULEZ answer
+ULEZ_NOTICES = {
+    'not_found': 'not recognised by the emissions checker',
+    'busy': 'emissions checker busy, try again shortly',
+    'error': "emissions checker didn't answer",
+    'unclear': 'no automatic answer for this vehicle',
 }
 
 
@@ -121,29 +122,14 @@ def countdown_text(target, today, today_text):
     return f"{plural(abs(delta), 'day')} overdue"
 
 
-def lez_historic(vehicle, today):
-    """Scotland exempts vehicles made or first registered 30+ years ago."""
-    dates = [d for d in (parse_date(vehicle.get('dateOfManufacture')),
-                         parse_date(vehicle.get('dateOfFirstRegistration'))) if d]
-    if not dates:
-        return False
-    try:
-        limit = today.replace(year=today.year - 30)
-    except ValueError:  # 29 February
-        limit = today.replace(year=today.year - 30, day=28)
-    return min(dates) < limit
+def ulez_verdict(vehicle):
+    """compliant or not_compliant, from the Scottish LEZ checker's reply.
 
-
-def lez_verdict(vehicle, today):
-    """compliant, exempt or not_compliant, by the checker page's own rules."""
-    status = vehicle.get('s')
-    if status == 'c' or (vehicle.get('vehicleType') or '').upper() == 'MOTORCYCLE':
-        return 'compliant'
-    if status == 'e' or lez_historic(vehicle, today):
-        return 'exempt'
-    if status == 'n':
-        return 'not_compliant'
-    return ''
+    Scotland's LEZs and London's ULEZ set the same standard for cars and
+    vans (Euro 4 petrol, Euro 6 diesel), so its answer covers both.
+    Anything else (exempt, unrecognised) gets no automatic answer.
+    """
+    return {'c': 'compliant', 'n': 'not_compliant'}.get(vehicle.get('s'), '')
 
 
 def build_details(dvla, mot, mot_status='ok', lez=None, lez_status='',
@@ -279,10 +265,14 @@ def build_details(dvla, mot, mot_status='ok', lez=None, lez_status='',
     mot_problem = MOT_PROBLEMS.get(mot_status, '')
     mot_notice = mot_problem or ('' if mot_tests else NO_MOT_HISTORY)
 
-    # Scottish LEZ answer, or why there isn't one
-    verdict = lez_verdict(lez, today) if lez_status == 'ok' and lez else ''
-    lez_notice = '' if verdict else LEZ_NOTICES.get(
-        lez_status, LEZ_NOTICES['error'])
+    # ULEZ answer, or why there isn't one
+    verdict = ulez_verdict(lez) if lez_status == 'ok' and lez else ''
+    if verdict:
+        ulez_notice = ''
+    elif lez_status == 'ok':
+        ulez_notice = ULEZ_NOTICES['unclear']
+    else:
+        ulez_notice = ULEZ_NOTICES.get(lez_status, ULEZ_NOTICES['error'])
 
     return {
         'dvla': dvla,
@@ -300,7 +290,7 @@ def build_details(dvla, mot, mot_status='ok', lez=None, lez_status='',
         'tax_estimate': tax_estimate,
         'mot_notice': mot_notice,
         'mot_problem': bool(mot_problem),
-        'lez_verdict': verdict,
-        'lez_notice': lez_notice,
+        'ulez_verdict': verdict,
+        'ulez_notice': ulez_notice,
         'raw_json': raw_json,
     }

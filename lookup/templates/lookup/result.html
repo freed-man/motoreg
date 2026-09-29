@@ -115,29 +115,17 @@
                             </p>
                             <p>
                                 <strong>ULEZ:</strong>
+                                {% if ulez_verdict == "compliant" %}
+                                <i class="fas fa-check-circle text-success"></i>
+                                <span class="text-success">Compliant</span>
+                                {% elif ulez_verdict == "not_compliant" %}
+                                <i class="fas fa-times-circle text-danger"></i>
+                                <span class="text-danger">Not compliant</span>
+                                {% else %}
                                 <a href="https://tfl.gov.uk/modes/driving/check-your-vehicle/" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
                                     Check on TfL <i class="fas fa-external-link-alt small"></i>
                                 </a>
-                            </p>
-                            <p>
-                                <strong>LEZ (Scotland):</strong>
-                                {% if lez_verdict == "compliant" %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Compliant</span>
-                                <br><small class="text-muted">(can be driven in any Scottish LEZ)</small>
-                                {% elif lez_verdict == "exempt" %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Exempt</span>
-                                <br><small class="text-muted">(can be driven in any Scottish LEZ)</small>
-                                {% elif lez_verdict == "not_compliant" %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <span class="text-danger">Not compliant</span>
-                                <br><small class="text-muted">(can't be driven in a Scottish LEZ unless exempt)</small>
-                                {% else %}
-                                <a href="https://vehicleemissionscheck.service.gov.scot/" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
-                                    Check on LEZ Scotland <i class="fas fa-external-link-alt small"></i>
-                                </a>
-                                <br><small class="text-muted">({{ lez_notice }})</small>
+                                <br><small class="text-muted">({{ ulez_notice }})</small>
                                 {% endif %}
                             </p>
                         </div>

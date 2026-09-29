@@ -109,13 +109,13 @@
                             </p>
                             <p>
                                 <strong>Insurance:</strong>
-                                <a href="https://enquiry.navigate.mib.org.uk/checkyourvehicle" target="_blank" rel="noopener noreferrer" class="text-decoration-none">
+                                <a href="https://enquiry.navigate.mib.org.uk/checkyourvehicle" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
                                     Check on askMID <i class="fas fa-external-link-alt small"></i>
                                 </a>
                             </p>
                             <p>
                                 <strong>ULEZ:</strong>
-                                <a href="https://tfl.gov.uk/modes/driving/check-your-vehicle/" target="_blank" rel="noopener noreferrer" class="text-decoration-none">
+                                <a href="https://tfl.gov.uk/modes/driving/check-your-vehicle/" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
                                     Check on TfL <i class="fas fa-external-link-alt small"></i>
                                 </a>
                             </p>
@@ -191,4 +191,17 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // askMID and TfL can't take the reg in their links, so copy it on the way out
+    document.querySelectorAll('[data-copy-reg]').forEach(function (link) {
+        link.addEventListener('click', function () {
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(link.dataset.copyReg).catch(function () {});
+            }
+        });
+    });
+</script>
 {% endblock %}

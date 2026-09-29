@@ -1,10 +1,12 @@
 """
-Calls to the DVLA Vehicle Enquiry Service and the DVSA MOT History API.
+Calls to the DVLA Vehicle Enquiry Service, the DVSA MOT History API and
+Transport Scotland's LEZ checker.
 
-Both are asked at the same time, and the DVSA OAuth token is cached until
-shortly before it expires instead of being fetched on every lookup.
+All three are asked at the same time, and the DVSA OAuth token is cached
+until shortly before it expires instead of being fetched on every lookup.
 """
 
+import logging
 import os
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
@@ -12,7 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from django.core.cache import cache
 
+logger = logging.getLogger(__name__)
+
 TIMEOUT = 10  # seconds, per request
+LEZ_URL = 'https://vehicleemissionscheck.service.gov.scot/api'
+USER_AGENT = 'motoreg (personal vehicle lookup)'
 TOKEN_CACHE_KEY = 'dvsa-mot-token'
 MOT_SETTINGS = (
     'MOT_TOKEN_URL', 'MOT_CLIENT_ID', 'MOT_CLIENT_SECRET',
@@ -24,11 +30,12 @@ Result = namedtuple('Result', 'status data')
 
 
 def fetch_vehicle(registration):
-    """Look a reg up at DVLA and DVSA in parallel. Returns (dvla, mot)."""
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    """Look a reg up everywhere in parallel. Returns (dvla, mot, lez)."""
+    with ThreadPoolExecutor(max_workers=3) as pool:
         dvla = pool.submit(fetch_dvla, registration)
         mot = pool.submit(fetch_mot, registration)
-        return dvla.result(), mot.result()
+        lez = pool.submit(fetch_lez, registration)
+        return dvla.result(), mot.result(), lez.result()
 
 
 def _status_for(status_code):
@@ -133,3 +140,34 @@ def fetch_mot(registration):
         # loop once more with a fresh one
 
     return _result_from(response)
+
+
+def fetch_lez(registration):
+    """Scotland's LEZ checker: the same request its own page makes."""
+    try:
+        response = requests.post(
+            LEZ_URL,
+            json={'vrn': registration},
+            headers={'User-Agent': USER_AGENT},
+            timeout=TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        logger.warning('LEZ checker unreachable: %s', exc)
+        return Result('error', None)
+    if response.status_code == 429:
+        return Result('busy', None)
+    if response.status_code != 200:
+        logger.warning('LEZ checker returned HTTP %s', response.status_code)
+        return Result('error', None)
+    try:
+        vehicle = response.json()['vehicleResult'][0]
+        status = vehicle['s']
+    except (ValueError, KeyError, IndexError, TypeError):
+        logger.warning('LEZ checker sent an unexpected reply')
+        return Result('error', None)
+    if status == 'u':
+        return Result('not_found', vehicle)
+    if status not in ('c', 'e', 'n'):
+        logger.warning('LEZ checker sent an unknown status %r', status)
+        return Result('error', None)
+    return Result('ok', vehicle)

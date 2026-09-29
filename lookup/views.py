@@ -58,14 +58,15 @@ def result(request, reg):
     if request.path != canonical:
         return redirect(canonical)
 
-    dvla, mot = fetch_vehicle(clean)
+    dvla, mot, lez = fetch_vehicle(clean)
     if dvla.status != 'ok':
         return render(request, 'lookup/index.html', {
             'error': DVLA_ERRORS[dvla.status].format(reg=clean),
             'reg': clean,
         }, status=404 if dvla.status == 'not_found' else 503)
 
-    context = build_details(dvla.data, mot.data, mot_status=mot.status)
+    context = build_details(dvla.data, mot.data, mot_status=mot.status,
+                            lez=lez.data, lez_status=lez.status)
     return render(request, 'lookup/result.html', context)
 
 

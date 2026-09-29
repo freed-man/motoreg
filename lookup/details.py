@@ -44,6 +44,14 @@ MOT_PROBLEMS = {
 }
 
 
+# Shown with a link to the checker when there's no LEZ answer
+LEZ_NOTICES = {
+    'not_found': "the Scottish checker doesn't recognise this reg",
+    'busy': 'the Scottish checker is at capacity, try again shortly',
+    'error': "the Scottish checker didn't answer",
+}
+
+
 def format_date(date_string):
     """Convert API date strings to dd/mm/yyyy format."""
     if not date_string:
@@ -113,10 +121,37 @@ def countdown_text(target, today, today_text):
     return f"{plural(abs(delta), 'day')} overdue"
 
 
-def build_details(dvla, mot, mot_status='ok', today=None):
-    """Everything result.html needs, from the two API responses."""
+def lez_historic(vehicle, today):
+    """Scotland exempts vehicles made or first registered 30+ years ago."""
+    dates = [d for d in (parse_date(vehicle.get('dateOfManufacture')),
+                         parse_date(vehicle.get('dateOfFirstRegistration'))) if d]
+    if not dates:
+        return False
+    try:
+        limit = today.replace(year=today.year - 30)
+    except ValueError:  # 29 February
+        limit = today.replace(year=today.year - 30, day=28)
+    return min(dates) < limit
+
+
+def lez_verdict(vehicle, today):
+    """compliant, exempt or not_compliant, by the checker page's own rules."""
+    status = vehicle.get('s')
+    if status == 'c' or (vehicle.get('vehicleType') or '').upper() == 'MOTORCYCLE':
+        return 'compliant'
+    if status == 'e' or lez_historic(vehicle, today):
+        return 'exempt'
+    if status == 'n':
+        return 'not_compliant'
+    return ''
+
+
+def build_details(dvla, mot, mot_status='ok', lez=None, lez_status='',
+                  today=None):
+    """Everything result.html needs, from the API responses."""
     today = today or timezone.localdate()
-    raw_json = json.dumps({'dvla': dvla, 'dvsa_mot': mot}, indent=2)
+    raw_json = json.dumps(
+        {'dvla': dvla, 'dvsa_mot': mot, 'lez_scotland': lez}, indent=2)
     dvla = copy.deepcopy(dvla)
     mot = copy.deepcopy(mot)
 
@@ -244,6 +279,11 @@ def build_details(dvla, mot, mot_status='ok', today=None):
     mot_problem = MOT_PROBLEMS.get(mot_status, '')
     mot_notice = mot_problem or ('' if mot_tests else NO_MOT_HISTORY)
 
+    # Scottish LEZ answer, or why there isn't one
+    verdict = lez_verdict(lez, today) if lez_status == 'ok' and lez else ''
+    lez_notice = '' if verdict else LEZ_NOTICES.get(
+        lez_status, LEZ_NOTICES['error'])
+
     return {
         'dvla': dvla,
         'model': model,
@@ -260,5 +300,7 @@ def build_details(dvla, mot, mot_status='ok', today=None):
         'tax_estimate': tax_estimate,
         'mot_notice': mot_notice,
         'mot_problem': bool(mot_problem),
+        'lez_verdict': verdict,
+        'lez_notice': lez_notice,
         'raw_json': raw_json,
     }

@@ -8,9 +8,9 @@ from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
 from .details import (
-    NO_MOT_HISTORY, build_details, countdown_text, span_text,
+    NO_MOT_HISTORY, build_details, countdown_text, lez_verdict, span_text,
 )
-from .services import Result, fetch_dvla, fetch_mot, fetch_vehicle
+from .services import Result, fetch_dvla, fetch_lez, fetch_mot, fetch_vehicle
 from .views import REG_PATTERN, clean_reg
 
 TODAY = date(2026, 9, 29)
@@ -68,6 +68,15 @@ MOT = {
     ],
 }
 
+LEZ_OK = {
+    's': 'c',
+    'vrn': 'AB12CDE',
+    'make': 'VOLKSWAGEN',
+    'vehicleType': 'CAR',
+    'fuelType': 'DIESEL',
+    'dateOfFirstRegistration': '2015-03-20',
+}
+
 API_ENV = {
     'DVLA_API_URL': 'https://dvla.example/vehicles',
     'DVLA_API_KEY': 'dvla-key',
@@ -111,6 +120,8 @@ class HomeAndFormTests(SimpleTestCase):
         self.assertContains(response, 'name="reg"')
         self.assertNotContains(response, 'Basket')
         self.assertNotContains(response, 'Login')
+        self.assertNotContains(response, 'class="lead')
+        self.assertNotContains(response, 'images/logo.png')
 
     def test_form_goes_to_clean_reg_page(self):
         response = self.client.get('/lookup/', {'reg': 'ab12 cde'})
@@ -145,7 +156,7 @@ class ResultPageTests(SimpleTestCase):
         fetch.assert_not_called()
 
     def test_full_result(self, fetch):
-        fetch.return_value = (Result('ok', DVLA), Result('ok', MOT))
+        fetch.return_value = (Result('ok', DVLA), Result('ok', MOT), Result('ok', LEZ_OK))
         response = self.client.get('/AB12CDE')
         fetch.assert_called_once_with('AB12CDE')
         self.assertEqual(response.status_code, 200)
@@ -160,11 +171,13 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'Tyre worn close to legal limit')
         self.assertContains(response, 'est. annual tax: £35')
         self.assertContains(response, 'Raw API response')
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
+        self.assertContains(response, '<span class="text-success">Compliant</span>')
         self.assertNotContains(response, 'Save to Profile')
         self.assertNotContains(response, 'Browse Services')
 
     def test_not_found(self, fetch):
-        fetch.return_value = (Result('not_found', None), Result('error', None))
+        fetch.return_value = (Result('not_found', None), Result('error', None), Result('ok', LEZ_OK))
         response = self.client.get('/AB12CDE')
         self.assertEqual(response.status_code, 404)
         self.assertTemplateUsed(response, 'lookup/index.html')
@@ -173,23 +186,39 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'value="AB12CDE"', status_code=404)
 
     def test_bad_dvla_key(self, fetch):
-        fetch.return_value = (Result('auth', None), Result('ok', MOT))
+        fetch.return_value = (Result('auth', None), Result('ok', MOT), Result('ok', LEZ_OK))
         response = self.client.get('/AB12CDE')
         self.assertContains(
             response, 'DVLA rejected the API key', status_code=503)
 
     def test_mot_failure_is_flagged_not_hidden(self, fetch):
-        fetch.return_value = (Result('ok', DVLA), Result('error', None))
+        fetch.return_value = (Result('ok', DVLA), Result('error', None), Result('ok', LEZ_OK))
         response = self.client.get('/AB12CDE')
         self.assertContains(response, 'load MOT history from DVSA')
         self.assertContains(response, 'alert-warning')
         self.assertNotContains(response, NO_MOT_HISTORY)
 
     def test_no_mot_history(self, fetch):
-        fetch.return_value = (Result('ok', DVLA), Result('not_found', None))
+        fetch.return_value = (Result('ok', DVLA), Result('not_found', None), Result('ok', LEZ_OK))
         response = self.client.get('/AB12CDE')
         self.assertContains(response, NO_MOT_HISTORY)
         self.assertContains(response, 'alert-info')
+
+    def test_lez_not_compliant(self, fetch):
+        fetch.return_value = (
+            Result('ok', DVLA), Result('ok', MOT), Result('ok', dict(LEZ_OK, s='n')))
+        response = self.client.get('/AB12CDE')
+        self.assertContains(
+            response, '<span class="text-danger">Not compliant</span>')
+
+    def test_lez_unavailable_falls_back_to_link(self, fetch):
+        fetch.return_value = (
+            Result('ok', DVLA), Result('ok', MOT), Result('error', None))
+        response = self.client.get('/AB12CDE')
+        self.assertContains(
+            response, 'href="https://vehicleemissionscheck.service.gov.scot/"')
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=3)
+        self.assertContains(response, 'the Scottish checker didn')
 
 
 class DetailsTests(SimpleTestCase):
@@ -278,6 +307,33 @@ class DetailsTests(SimpleTestCase):
         self.assertIn('"taxDueDate": "2027-03-01"', context['raw_json'])
         self.assertNotIn('Formatted', context['raw_json'])
 
+    def test_lez_verdicts(self):
+        def verdict(**changes):
+            return lez_verdict(dict(LEZ_OK, **changes), TODAY)
+        self.assertEqual(verdict(), 'compliant')
+        self.assertEqual(verdict(s='e'), 'exempt')
+        self.assertEqual(verdict(s='n'), 'not_compliant')
+        self.assertEqual(verdict(s='n', vehicleType='MOTORCYCLE'), 'compliant')
+        # 30+ years old is historic, going by the earlier of the two dates
+        self.assertEqual(
+            verdict(s='n', dateOfFirstRegistration='1990-05-01'), 'exempt')
+        self.assertEqual(verdict(s='n', dateOfManufacture='1995-01-10',
+                                 dateOfFirstRegistration='1999-06-01'), 'exempt')
+        self.assertEqual(verdict(s='n', dateOfManufacture='2001-01-10',
+                                 dateOfFirstRegistration='1996-09-30'),
+                         'not_compliant')
+
+    def test_lez_answer_or_reason(self):
+        self.assertEqual(self.details()['lez_verdict'], '')
+        context = build_details(DVLA, MOT, lez=dict(LEZ_OK, s='n'),
+                                lez_status='ok', today=TODAY)
+        self.assertEqual(
+            (context['lez_verdict'], context['lez_notice']), ('not_compliant', ''))
+        context = build_details(DVLA, MOT, lez_status='busy', today=TODAY)
+        self.assertEqual(context['lez_verdict'], '')
+        self.assertIn('at capacity', context['lez_notice'])
+        self.assertIn('"lez_scotland": null', context['raw_json'])
+
 
 @patch.dict(os.environ, API_ENV)
 class ServiceTests(SimpleTestCase):
@@ -350,11 +406,40 @@ class ServiceTests(SimpleTestCase):
         with patch.dict(os.environ, {'MOT_API_KEY': ''}):
             self.assertEqual(fetch_mot('AB12CDE').status, 'not_configured')
 
+    @patch('lookup.services.fetch_lez', return_value=Result('ok', LEZ_OK))
     @patch('lookup.services.fetch_mot', return_value=Result('ok', MOT))
     @patch('lookup.services.fetch_dvla', return_value=Result('ok', DVLA))
-    def test_fetch_vehicle_asks_both(self, dvla, mot):
+    def test_fetch_vehicle_asks_all_three(self, dvla, mot, lez):
         self.assertEqual(
-            fetch_vehicle('AB12CDE'), (Result('ok', DVLA), Result('ok', MOT)))
+            fetch_vehicle('AB12CDE'),
+            (Result('ok', DVLA), Result('ok', MOT), Result('ok', LEZ_OK)))
+
+    @patch('lookup.services.requests.post')
+    def test_lez_ok(self, post):
+        post.return_value = fake_response(200, {'vehicleResult': [LEZ_OK]})
+        self.assertEqual(fetch_lez('AB12CDE'), Result('ok', LEZ_OK))
+        args, kwargs = post.call_args
+        self.assertEqual(
+            args[0], 'https://vehicleemissionscheck.service.gov.scot/api')
+        self.assertEqual(kwargs['json'], {'vrn': 'AB12CDE'})
+        self.assertTrue(kwargs['timeout'])
+
+    @patch('lookup.services.requests.post')
+    def test_lez_other_answers(self, post):
+        post.return_value = fake_response(
+            200, {'vehicleResult': [dict(LEZ_OK, s='u')]})
+        self.assertEqual(fetch_lez('AB12CDE').status, 'not_found')
+        post.return_value = fake_response(429)
+        self.assertEqual(fetch_lez('AB12CDE').status, 'busy')
+        with self.assertLogs('lookup.services', 'WARNING'):
+            for reply in (fake_response(500),
+                          fake_response(200, ValueError('not json')),
+                          fake_response(200, {'vehicleResult': []}),
+                          fake_response(200, {'vehicleResult': [{'s': 'x'}]})):
+                post.return_value = reply
+                self.assertEqual(fetch_lez('AB12CDE').status, 'error')
+            post.side_effect = requests.Timeout
+            self.assertEqual(fetch_lez('AB12CDE').status, 'error')
 
 
 class PasswordGateTests(SimpleTestCase):

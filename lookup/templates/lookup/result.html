@@ -129,6 +129,10 @@
                                     <button type="button" id="insurance-button" class="btn btn-sm btn-outline-dark py-0">Check insurance</button>
                                 </span>
                                 <small class="d-block text-muted" id="insurance-note" hidden></small>
+                                <details class="small text-muted" id="insurance-seen" hidden>
+                                    <summary>What askMID showed</summary>
+                                    <pre class="mb-0 mt-1 p-2 bg-light border rounded" style="white-space: pre-wrap"></pre>
+                                </details>
                                 {% csrf_token %}
                             </p>
                         </div>
@@ -226,6 +230,7 @@
         var answer = document.getElementById('insurance-answer');
         var button = document.getElementById('insurance-button');
         var note = document.getElementById('insurance-note');
+        var seen = document.getElementById('insurance-seen');
         var token = document.querySelector('input[name="csrfmiddlewaretoken"]').value;
         var polls = 0;
 
@@ -260,10 +265,24 @@
             answer.append(icon, words);
         }
 
+        function showSeen(info) {
+            var lines = [];
+            if (info && info.title !== undefined) {
+                lines.push('Title: ' + (info.title || '(none)'), 'Address: ' + info.address,
+                           'Frames: ' + (info.frames.length ? info.frames.join('\n        ') : 'none'),
+                           'Text: ' + (info.text || '(none)'));
+            } else if (info && info.error) {
+                lines.push(info.error);
+            }
+            seen.querySelector('pre').textContent = lines.join('\n');
+            seen.hidden = !lines.length;
+        }
+
         function show(state) {
             answer.textContent = '';
             button.hidden = false;
             say('');
+            showSeen(null);
             if (state.state === 'running') {
                 button.hidden = true;
                 answer.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>'
@@ -275,10 +294,11 @@
                 verdict(state.status === 'INSURED');
                 var about = [state.make_model, state.site_time ? 'askMID ' + state.site_time : ''].filter(Boolean);
                 say(about.length ? '(' + about.join(', ') + ')' : '');
-            } else if (state.state === 'done' && state.status === 'HUMAN_CHECK') {
-                say('askMID asked for a human check, so ', true);
             } else if (state.state === 'done') {
-                say("Couldn't read askMID's answer, so ", true);
+                var why = state.reason ? ' (' + state.reason + ')' : '';
+                say((state.status === 'HUMAN_CHECK' ? 'askMID asked for a human check' : "Couldn't read askMID's answer")
+                    + why + ', so ', true);
+                showSeen(state.seen);
             }
         }
 

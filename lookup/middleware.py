@@ -1,6 +1,6 @@
 """
 Optional lock for the whole site. Does nothing unless the SITE_PASSWORD
-config var is set; then every page asks for it once per browser.
+config var is set; then every page asks for it, once a day in each browser.
 """
 
 from urllib.parse import urlencode

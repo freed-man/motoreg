@@ -29,7 +29,7 @@ ALLOWED_HOSTS += [
     if host.strip()
 ]
 
-# Optional. When set, the site asks for this password once per browser.
+# Optional. When set, the site asks for this password once a day in each browser.
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
 
 INSTALLED_APPS = [
@@ -78,7 +78,7 @@ CACHES = {
         'LOCATION': os.path.join(tempfile.gettempdir(), 'motoreg-cache'),
     },
 }
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 90  # stay unlocked for 90 days
+SESSION_COOKIE_AGE = 60 * 60 * 24  # ask for the password again after a day
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 

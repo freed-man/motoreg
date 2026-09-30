@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 import types
 from datetime import date
 from unittest.mock import Mock, patch
@@ -534,11 +535,38 @@ class InsuranceTests(SimpleTestCase):
             self.assertEqual(self.post().json()['status'], 'INSURED')
             self.assertEqual(thread.call_count, 1)
 
+    @patch('lookup.insurance.run_check')
+    def test_failed_check_explains_itself_and_can_rerun(self, run_check):
+        run_check.return_value = {
+            'status': 'ERROR', 'seen': {'title': 'Just a moment...'},
+            'detail': 'NeedsHuman: The site wants a human check (a captcha / '
+                      'human-verification widget is showing). Please complete it.'}
+        insurance._job('AB12CDE')
+        state = self.client.get('/AB12CDE/insurance').json()
+        self.assertEqual(state['status'], 'HUMAN_CHECK')
+        self.assertEqual(state['reason'], 'a captcha / human-verification widget is showing')
+        self.assertEqual(state['seen'], {'title': 'Just a moment...'})
+        with patch('lookup.insurance.threading.Thread') as thread:
+            self.assertEqual(self.post().json(), {'state': 'running'})
+            thread.assert_called_once()
+
+    @patch('lookup.insurance.run_check')
+    def test_getting_lost_is_not_called_a_human_check(self, run_check):
+        run_check.return_value = {
+            'status': 'ERROR',
+            'detail': "NeedsHuman: I couldn't get to the registration box on my own. "
+                      'Please click through to it in the browser window.'}
+        insurance._job('AB12CDE')
+        state = insurance.status('AB12CDE')
+        self.assertEqual(state['status'], 'ERROR')
+        self.assertEqual(state['reason'], "I couldn't get to the registration box on my own")
+
     @patch('lookup.insurance.run_check', side_effect=RuntimeError('boom'))
     def test_a_crash_is_reported_not_left_running(self, run_check):
         with self.assertLogs('lookup.insurance', 'ERROR'):
             insurance._job('AB12CDE')
         self.assertEqual(insurance.status('AB12CDE')['status'], 'ERROR')
+        self.assertEqual(insurance.status('AB12CDE')['reason'], 'boom')
 
     def test_human_check_stops_the_script(self):
         fake = types.SimpleNamespace(DEFAULT_URL='https://example.test',
@@ -588,6 +616,16 @@ class PasswordGateTests(SimpleTestCase):
 
         with self.settings(SITE_PASSWORD='new password'):
             self.assertEqual(self.client.get('/').status_code, 302)
+
+    @override_settings(SITE_PASSWORD='correct horse')
+    def test_password_asked_again_after_a_day(self):
+        self.client.post('/unlock/', {'password': 'correct horse', 'next': '/'})
+        self.assertEqual(self.client.get('/').status_code, 200)
+        with patch('django.core.signing.time.time', return_value=time.time() + 23 * 3600):
+            self.assertEqual(self.client.get('/').status_code, 200)
+        with patch('django.core.signing.time.time', return_value=time.time() + 25 * 3600):
+            self.assertRedirects(self.client.get('/'), '/unlock/?next=%2F',
+                                 fetch_redirect_response=False)
 
     @override_settings(SITE_PASSWORD='correct horse')
     def test_no_open_redirect(self):

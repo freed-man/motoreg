@@ -38,8 +38,8 @@
                     <div class="row">
                         <div class="col-md-6">
                             <p><strong>Registration:</strong> {{ dvla.registrationNumber }}</p>
-                            <p><strong>Colour:</strong> {{ dvla.colour }}</p>
-                            <p><strong>Fuel Type:</strong> {{ fuel_display }}</p>
+                            <p><strong>Colour:</strong> {{ dvla.colour|lower|capfirst }}</p>
+                            <p><strong>Fuel Type:</strong> {{ fuel_display|lower|capfirst }}</p>
                             {% if dvla.engineCapacity %}
                             <p><strong>Engine Size:</strong> {{ dvla.engineCapacity }}cc</p>
                             {% endif %}
@@ -108,12 +108,6 @@
                                 {% endif %}
                             </p>
                             <p>
-                                <strong>Insurance:</strong>
-                                <a href="https://enquiry.navigate.mib.org.uk/checkyourvehicle" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
-                                    Check on askMID <i class="fas fa-external-link-alt small"></i>
-                                </a>
-                            </p>
-                            <p>
                                 <strong>ULEZ:</strong>
                                 {% if ulez_verdict == "compliant" %}
                                 <i class="fas fa-check-circle text-success"></i>
@@ -126,6 +120,21 @@
                                     Check on TfL <i class="fas fa-external-link-alt small"></i>
                                 </a>
                                 <br><small class="text-muted">({{ ulez_notice }})</small>
+                                {% endif %}
+                            </p>
+                            <p>
+                                <strong>Insurance:</strong>
+                                {% if insurance_check %}
+                                <span id="insurance" data-url="{% url 'insurance' dvla.registrationNumber %}" data-reg="{{ dvla.registrationNumber }}">
+                                    <span id="insurance-answer"></span>
+                                    <button type="button" id="insurance-button" class="btn btn-sm btn-outline-dark py-0">Check insurance</button>
+                                </span>
+                                <small class="d-block text-muted" id="insurance-note" hidden></small>
+                                {% csrf_token %}
+                                {% else %}
+                                <a href="https://enquiry.navigate.mib.org.uk/checkyourvehicle" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
+                                    Check on askMID <i class="fas fa-external-link-alt small"></i>
+                                </a>
                                 {% endif %}
                             </p>
                         </div>
@@ -213,4 +222,105 @@
         });
     });
 </script>
+{% if insurance_check %}
+<script>
+    // On-demand askMID check for your own cars (MY_VEHICLES)
+    (function () {
+        var box = document.getElementById('insurance');
+        if (!box) {
+            return;
+        }
+        var answer = document.getElementById('insurance-answer');
+        var button = document.getElementById('insurance-button');
+        var note = document.getElementById('insurance-note');
+        var token = document.querySelector('input[name="csrfmiddlewaretoken"]').value;
+        var polls = 0;
+
+        function askmidLink() {
+            var link = document.createElement('a');
+            link.href = 'https://enquiry.navigate.mib.org.uk/checkyourvehicle';
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = 'check on askMID';
+            link.addEventListener('click', function () {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(box.dataset.reg).catch(function () {});
+                }
+            });
+            return link;
+        }
+
+        function say(text, withLink) {
+            note.textContent = text;
+            if (withLink) {
+                note.appendChild(askmidLink());
+            }
+            note.hidden = !text;
+        }
+
+        function verdict(insured) {
+            var icon = document.createElement('i');
+            icon.className = insured ? 'fas fa-check-circle text-success' : 'fas fa-times-circle text-danger';
+            var words = document.createElement('span');
+            words.className = insured ? 'text-success' : 'text-danger';
+            words.textContent = insured ? ' Insured' : ' Not insured';
+            answer.append(icon, words);
+        }
+
+        function show(state) {
+            answer.textContent = '';
+            button.hidden = false;
+            say('');
+            if (state.state === 'running') {
+                button.hidden = true;
+                answer.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>'
+                    + ' <span class="text-muted">Checking with askMID...</span>';
+            } else if (state.state === 'busy') {
+                say('Another of your cars is being checked. Try again in a minute.');
+            } else if (state.state === 'done' && (state.status === 'INSURED' || state.status === 'NOT_INSURED')) {
+                button.hidden = true;
+                verdict(state.status === 'INSURED');
+                var about = [state.make_model, state.site_time ? 'askMID ' + state.site_time : ''].filter(Boolean);
+                say(about.length ? '(' + about.join(', ') + ')' : '');
+            } else if (state.state === 'done' && state.status === 'HUMAN_CHECK') {
+                say('askMID asked for a human check, so ', true);
+            } else if (state.state === 'done') {
+                say("Couldn't read askMID's answer, so ", true);
+            }
+        }
+
+        function follow(state) {
+            show(state);
+            if (state.state !== 'running') {
+                return;
+            }
+            if (++polls > 100) {
+                show({state: 'none'});
+                say("The check didn't finish. Try again, or ", true);
+                return;
+            }
+            setTimeout(function () {
+                fetch(box.dataset.url, {headers: {'X-Requested-With': 'fetch'}})
+                    .then(function (r) { return r.json(); })
+                    .then(follow)
+                    .catch(function () { say('Lost touch with the check. Refresh to see if it finished, or ', true); });
+            }, 2000);
+        }
+
+        button.addEventListener('click', function () {
+            polls = 0;
+            button.hidden = true;
+            fetch(box.dataset.url, {method: 'POST', headers: {'X-CSRFToken': token, 'X-Requested-With': 'fetch'}})
+                .then(function (r) { return r.json(); })
+                .then(follow)
+                .catch(function () { show({state: 'none'}); say("Couldn't start the check, so ", true); });
+        });
+
+        // pick up a check that's already running, or a recent answer
+        fetch(box.dataset.url, {headers: {'X-Requested-With': 'fetch'}})
+            .then(function (r) { return r.json(); })
+            .then(follow);
+    })();
+</script>
+{% endif %}
 {% endblock %}

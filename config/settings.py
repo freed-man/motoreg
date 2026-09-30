@@ -7,6 +7,8 @@ old auto:commit site used, so its values can be copied straight across.
 """
 
 import os
+import re
+import tempfile
 from pathlib import Path
 
 if os.path.isfile('env.py'):
@@ -30,6 +32,14 @@ ALLOWED_HOSTS += [
 
 # Optional. When set, the site asks for this password once per browser.
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
+
+# Your own cars, comma separated. Their result pages get a button that checks
+# insurance with askMID; every other reg keeps just the link.
+MY_VEHICLES = {
+    re.sub(r'[^A-Z0-9]', '', reg.upper())
+    for reg in os.environ.get('MY_VEHICLES', '').split(',')
+    if reg.strip()
+}
 
 INSTALLED_APPS = [
     'django.contrib.staticfiles',
@@ -68,6 +78,15 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # the SITE_PASSWORD unlock) lives in a signed cookie instead.
 DATABASES = {}
 SESSION_ENGINE = 'django.contrib.sessions.backends.signed_cookies'
+
+# File based, so every web worker on the dyno sees the same insurance check
+# progress (and shares one DVSA token)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': os.path.join(tempfile.gettempdir(), 'motoreg-cache'),
+    },
+}
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 90  # stay unlocked for 90 days
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG

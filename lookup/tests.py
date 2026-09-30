@@ -1,5 +1,6 @@
 import copy
 import os
+import types
 from datetime import date
 from unittest.mock import Mock, patch
 
@@ -7,6 +8,7 @@ import requests
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
+from . import insurance
 from .details import (
     NO_MOT_HISTORY, build_details, countdown_text, span_text, ulez_verdict,
 )
@@ -221,6 +223,15 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
         self.assertContains(response, 'emissions checker didn')
         self.assertNotContains(response, 'LEZ (Scotland)')
+
+    def test_colour_fuel_case_and_status_order(self, fetch):
+        fetch.return_value = (Result('ok', DVLA), Result('ok', MOT), Result('ok', LEZ_OK))
+        html = self.client.get('/AB12CDE').content.decode()
+        self.assertIn('<strong>Colour:</strong> Blue</p>', html)
+        self.assertIn('<strong>Fuel Type:</strong> Diesel</p>', html)
+        spots = [html.index(f'<strong>{label}:</strong>')
+                 for label in ('MOT', 'Tax', 'ULEZ', 'Insurance')]
+        self.assertEqual(spots, sorted(spots))
 
 
 class DetailsTests(SimpleTestCase):
@@ -461,6 +472,95 @@ class TaxTests(SimpleTestCase):
     def test_pre_2001_engine_size(self):
         self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1400)['annual_rate'], 230)
         self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1796)['annual_rate'], 375)
+
+
+
+@override_settings(MY_VEHICLES={'AB12CDE'})
+class InsuranceTests(SimpleTestCase):
+    def setUp(self):
+        cache.clear()
+
+    def post(self, reg='AB12CDE'):
+        return self.client.post(f'/{reg}/insurance', HTTP_X_REQUESTED_WITH='fetch')
+
+    @patch('lookup.views.fetch_vehicle')
+    def test_button_only_on_my_cars(self, fetch):
+        fetch.side_effect = lambda reg: (
+            Result('ok', dict(DVLA, registrationNumber=reg)), Result('ok', MOT),
+            Result('ok', LEZ_OK))
+        mine = self.client.get('/AB12CDE')
+        self.assertContains(mine, 'id="insurance-button"')
+        self.assertContains(mine, 'data-url="/AB12CDE/insurance"')
+        self.assertContains(mine, 'csrfmiddlewaretoken')
+        other = self.client.get('/NC15ABC')
+        self.assertNotContains(other, 'insurance-button')
+        self.assertNotContains(other, 'csrfmiddlewaretoken')
+        self.assertContains(other, 'data-copy-reg="NC15ABC"', count=1)
+
+    def test_other_regs_cannot_be_checked(self):
+        self.assertEqual(self.post('NC15ABC').status_code, 404)
+        self.assertEqual(self.client.get('/NC15ABC/insurance').status_code, 404)
+
+    @patch('lookup.insurance.threading.Thread')
+    def test_one_check_at_a_time(self, thread):
+        self.assertEqual(self.client.get('/AB12CDE/insurance').json(), {'state': 'none'})
+        self.assertEqual(self.post().json(), {'state': 'running'})
+        self.assertEqual(self.post().json(), {'state': 'running'})
+        self.assertEqual(thread.call_count, 1)
+
+    @override_settings(MY_VEHICLES={'AB12CDE', 'CD34EFG'})
+    @patch('lookup.insurance.threading.Thread')
+    def test_second_car_waits_its_turn(self, thread):
+        self.post()
+        self.assertEqual(self.post('CD34EFG').json(), {'state': 'busy'})
+
+    @patch('lookup.insurance.threading.Thread')
+    def test_plain_form_post_goes_back_to_the_page(self, thread):
+        response = self.client.post('/AB12CDE/insurance')
+        self.assertRedirects(response, '/AB12CDE', fetch_redirect_response=False)
+
+    @patch('lookup.insurance.run_check')
+    def test_answer_is_kept_and_not_rechecked(self, run_check):
+        run_check.return_value = {
+            'status': 'INSURED', 'make_model': 'FORD FOCUS',
+            'site_time': '14:32:10 29 September 2026', 'detail': 'INSURED'}
+        with patch('lookup.insurance.threading.Thread') as thread:
+            thread.side_effect = lambda target, args, daemon: types.SimpleNamespace(
+                start=lambda: target(*args))
+            self.post()
+            state = self.client.get('/AB12CDE/insurance').json()
+            self.assertEqual((state['state'], state['status'], state['make_model']),
+                             ('done', 'INSURED', 'FORD FOCUS'))
+            self.assertIsNone(cache.get(insurance.LOCK_KEY))
+            self.assertEqual(self.post().json()['status'], 'INSURED')
+            self.assertEqual(thread.call_count, 1)
+
+    @patch('lookup.insurance.run_check', side_effect=RuntimeError('boom'))
+    def test_a_crash_is_reported_not_left_running(self, run_check):
+        with self.assertLogs('lookup.insurance', 'ERROR'):
+            insurance._job('AB12CDE')
+        self.assertEqual(insurance.status('AB12CDE')['status'], 'ERROR')
+
+    def test_human_check_stops_the_script(self):
+        fake = types.SimpleNamespace(DEFAULT_URL='https://example.test',
+                                     pause=lambda message: None)
+
+        def check_one(page, reg, url, out_dir, timeout):
+            try:
+                fake.pause('The site wants a human check')
+            except Exception as exc:
+                return {'status': 'ERROR', 'detail': f'{type(exc).__name__}: {exc}'}
+            return {'status': 'INSURED', 'detail': 'pause did not stop it'}
+
+        fake.check_one = check_one
+        with patch('lookup.insurance.load_script', return_value=fake), \
+                patch('lookup.insurance.browser_page') as page:
+            page.return_value.__enter__.return_value = 'page'
+            result = insurance.run_check('AB12CDE')
+        self.assertTrue(result['detail'].startswith('NeedsHuman'))
+        with patch('lookup.insurance.run_check', return_value=result):
+            insurance._job('AB12CDE')
+        self.assertEqual(insurance.status('AB12CDE')['status'], 'HUMAN_CHECK')
 
 
 class PasswordGateTests(SimpleTestCase):

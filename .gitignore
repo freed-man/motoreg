@@ -7,3 +7,5 @@ __pycache__/
 staticfiles/
 *.log
 db.sqlite3
+# screenshots from tools/mid_check.py
+mid_results/

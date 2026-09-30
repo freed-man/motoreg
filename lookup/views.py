@@ -1,12 +1,14 @@
 import re
 
 from django.conf import settings
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.crypto import constant_time_compare
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_http_methods
 
+from . import insurance as insurance_checks
 from .details import build_details
 from .middleware import unlock_token
 from .services import fetch_vehicle
@@ -67,7 +69,22 @@ def result(request, reg):
 
     context = build_details(dvla.data, mot.data, mot_status=mot.status,
                             lez=lez.data, lez_status=lez.status)
+    context['insurance_check'] = clean in settings.MY_VEHICLES
     return render(request, 'lookup/result.html', context)
+
+
+@require_http_methods(['GET', 'POST'])
+def insurance(request, reg):
+    """Start (POST) or follow (GET) the askMID check for one of your cars."""
+    clean = clean_reg(reg)
+    if clean not in settings.MY_VEHICLES:
+        raise Http404
+    if request.method == 'GET':
+        return JsonResponse(insurance_checks.status(clean) or {'state': 'none'})
+    state = insurance_checks.start(clean)
+    if request.headers.get('X-Requested-With') == 'fetch':
+        return JsonResponse(state)
+    return redirect('result', reg=clean)    # plain form post without JavaScript
 
 
 def unlock(request):

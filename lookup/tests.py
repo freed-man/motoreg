@@ -174,7 +174,8 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'Tyre worn close to legal limit')
         self.assertContains(response, 'est. annual tax: £35')
         self.assertContains(response, 'Raw API response')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=1)
+        self.assertNotContains(response, 'data-copy-reg="AB12CDE"')
+        self.assertContains(response, 'id="insurance-button"')
         self.assertContains(response, '<span class="text-success">Compliant</span>')
         self.assertNotContains(response, 'Save to Profile')
         self.assertNotContains(response, 'Browse Services')
@@ -220,7 +221,7 @@ class ResultPageTests(SimpleTestCase):
         response = self.client.get('/AB12CDE')
         self.assertContains(
             response, 'href="https://tfl.gov.uk/modes/driving/check-your-vehicle/"')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=1)
         self.assertContains(response, 'emissions checker didn')
         self.assertNotContains(response, 'LEZ (Scotland)')
 
@@ -475,7 +476,6 @@ class TaxTests(SimpleTestCase):
 
 
 
-@override_settings(MY_VEHICLES={'AB12CDE'})
 class InsuranceTests(SimpleTestCase):
     def setUp(self):
         cache.clear()
@@ -484,22 +484,22 @@ class InsuranceTests(SimpleTestCase):
         return self.client.post(f'/{reg}/insurance', HTTP_X_REQUESTED_WITH='fetch')
 
     @patch('lookup.views.fetch_vehicle')
-    def test_button_only_on_my_cars(self, fetch):
+    def test_button_on_every_car(self, fetch):
         fetch.side_effect = lambda reg: (
             Result('ok', dict(DVLA, registrationNumber=reg)), Result('ok', MOT),
             Result('ok', LEZ_OK))
-        mine = self.client.get('/AB12CDE')
-        self.assertContains(mine, 'id="insurance-button"')
-        self.assertContains(mine, 'data-url="/AB12CDE/insurance"')
-        self.assertContains(mine, 'csrfmiddlewaretoken')
-        other = self.client.get('/NC15ABC')
-        self.assertNotContains(other, 'insurance-button')
-        self.assertNotContains(other, 'csrfmiddlewaretoken')
-        self.assertContains(other, 'data-copy-reg="NC15ABC"', count=1)
+        for reg in ('AB12CDE', 'NC15ABC'):
+            page = self.client.get(f'/{reg}')
+            self.assertContains(page, 'id="insurance-button"')
+            self.assertContains(page, f'data-url="/{reg}/insurance"')
+            self.assertContains(page, f'data-reg="{reg}"')
+            self.assertContains(page, 'csrfmiddlewaretoken')
+            self.assertContains(page, 'your car?')
 
-    def test_other_regs_cannot_be_checked(self):
-        self.assertEqual(self.post('NC15ABC').status_code, 404)
-        self.assertEqual(self.client.get('/NC15ABC/insurance').status_code, 404)
+    def test_only_real_regs_can_be_checked(self):
+        self.assertEqual(self.post('ABCDEFGH12').status_code, 404)
+        self.assertEqual(self.client.get('/ABCDEFGH12/insurance').status_code, 404)
+        self.assertEqual(self.client.post('/admin/insurance').status_code, 404)
 
     @patch('lookup.insurance.threading.Thread')
     def test_one_check_at_a_time(self, thread):
@@ -508,7 +508,6 @@ class InsuranceTests(SimpleTestCase):
         self.assertEqual(self.post().json(), {'state': 'running'})
         self.assertEqual(thread.call_count, 1)
 
-    @override_settings(MY_VEHICLES={'AB12CDE', 'CD34EFG'})
     @patch('lookup.insurance.threading.Thread')
     def test_second_car_waits_its_turn(self, thread):
         self.post()

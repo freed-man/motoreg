@@ -69,15 +69,14 @@ def result(request, reg):
 
     context = build_details(dvla.data, mot.data, mot_status=mot.status,
                             lez=lez.data, lez_status=lez.status)
-    context['insurance_check'] = clean in settings.MY_VEHICLES
     return render(request, 'lookup/result.html', context)
 
 
 @require_http_methods(['GET', 'POST'])
 def insurance(request, reg):
-    """Start (POST) or follow (GET) the askMID check for one of your cars."""
+    """Start (POST) or follow (GET) the askMID check for a car."""
     clean = clean_reg(reg)
-    if clean not in settings.MY_VEHICLES:
+    if not REG_PATTERN.fullmatch(clean):
         raise Http404
     if request.method == 'GET':
         return JsonResponse(insurance_checks.status(clean) or {'state': 'none'})

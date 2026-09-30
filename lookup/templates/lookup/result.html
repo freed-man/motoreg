@@ -124,18 +124,12 @@
                             </p>
                             <p>
                                 <strong>Insurance:</strong>
-                                {% if insurance_check %}
                                 <span id="insurance" data-url="{% url 'insurance' dvla.registrationNumber %}" data-reg="{{ dvla.registrationNumber }}">
                                     <span id="insurance-answer"></span>
                                     <button type="button" id="insurance-button" class="btn btn-sm btn-outline-dark py-0">Check insurance</button>
                                 </span>
                                 <small class="d-block text-muted" id="insurance-note" hidden></small>
                                 {% csrf_token %}
-                                {% else %}
-                                <a href="https://enquiry.navigate.mib.org.uk/checkyourvehicle" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
-                                    Check on askMID <i class="fas fa-external-link-alt small"></i>
-                                </a>
-                                {% endif %}
                             </p>
                         </div>
                     </div>
@@ -222,9 +216,8 @@
         });
     });
 </script>
-{% if insurance_check %}
 <script>
-    // On-demand askMID check for your own cars (MY_VEHICLES)
+    // On-demand askMID check, only when you press the button
     (function () {
         var box = document.getElementById('insurance');
         if (!box) {
@@ -276,7 +269,7 @@
                 answer.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>'
                     + ' <span class="text-muted">Checking with askMID...</span>';
             } else if (state.state === 'busy') {
-                say('Another of your cars is being checked. Try again in a minute.');
+                say('Another check is running. Try again in a minute.');
             } else if (state.state === 'done' && (state.status === 'INSURED' || state.status === 'NOT_INSURED')) {
                 button.hidden = true;
                 verdict(state.status === 'INSURED');
@@ -308,6 +301,9 @@
         }
 
         button.addEventListener('click', function () {
+            if (!window.confirm('Is ' + box.dataset.reg + " your car?\n\naskMID's free check is only for your own vehicles.")) {
+                return;
+            }
             polls = 0;
             button.hidden = true;
             fetch(box.dataset.url, {method: 'POST', headers: {'X-CSRFToken': token, 'X-Requested-With': 'fetch'}})
@@ -322,5 +318,4 @@
             .then(follow);
     })();
 </script>
-{% endif %}
 {% endblock %}

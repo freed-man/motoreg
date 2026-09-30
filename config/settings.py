@@ -7,7 +7,6 @@ old auto:commit site used, so its values can be copied straight across.
 """
 
 import os
-import re
 import tempfile
 from pathlib import Path
 
@@ -32,14 +31,6 @@ ALLOWED_HOSTS += [
 
 # Optional. When set, the site asks for this password once per browser.
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
-
-# Your own cars, comma separated. Their result pages get a button that checks
-# insurance with askMID; every other reg keeps just the link.
-MY_VEHICLES = {
-    re.sub(r'[^A-Z0-9]', '', reg.upper())
-    for reg in os.environ.get('MY_VEHICLES', '').split(',')
-    if reg.strip()
-}
 
 INSTALLED_APPS = [
     'django.contrib.staticfiles',

@@ -27,11 +27,6 @@
         outline: 3px solid #212529;
         outline-offset: 3px;
     }
-    .insurance-verdict {
-        font-size: 2.25rem;
-        font-weight: 700;
-        line-height: 1.1;
-    }
 </style>
 {% endblock %}
 
@@ -39,139 +34,48 @@
 <div class="row justify-content-center mt-3">
     <div class="col-sm-10 col-md-7 col-lg-5">
         <h1 class="h3 text-center mb-3">Insurance check</h1>
-        <form id="insurance-form" data-url="{% url 'insurance' 'A0' %}" novalidate>
-            {% csrf_token %}
+        <form id="insurance-form" data-askmid="{{ ASKMID_URL }}" novalidate>
             <input type="text" class="insurance-plate" id="reg-input" name="reg"
                 value="{{ reg }}" maxlength="10" placeholder="AB12 CDE" autocomplete="off"
                 autocapitalize="characters" autocorrect="off" spellcheck="false"
                 enterkeyhint="go" aria-label="Registration number"
                 {% if not reg %}autofocus{% endif %}>
             <button type="submit" class="btn btn-dark btn-lg w-100 mt-3" id="check-button">
-                <i class="fas fa-shield-alt"></i> Check insurance
+                <i class="fas fa-external-link-alt"></i> Copy reg and open askMID
             </button>
         </form>
-        <div class="card card-body text-center mt-4" id="insurance-answer" aria-live="polite" hidden></div>
-        <p class="small text-muted text-center mt-3 mb-0">askMID's free check is only for your own vehicles.</p>
+        <div class="card card-body text-center mt-4" id="insurance-note" aria-live="polite" hidden>
+            <p class="mb-0"></p>
+        </div>
+        <p class="small text-muted text-center mt-3 mb-0">
+            askMID's free check is only for your own vehicles. Once it opens, choose
+            Personal check, accept the terms, then paste the reg.
+        </p>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-    // Type a reg, press the button, and askMID's answer appears underneath
+    // askMID can't take the reg in its link, so copy it and open the check
     (function () {
         var form = document.getElementById('insurance-form');
         var input = document.getElementById('reg-input');
-        var button = document.getElementById('check-button');
-        var answer = document.getElementById('insurance-answer');
-        var token = form.querySelector('input[name="csrfmiddlewaretoken"]').value;
-        var reg = '';
-        var url = '';
-        var polls = 0;
+        var note = document.getElementById('insurance-note');
 
-        function add(tag, className, text) {
-            var el = document.createElement(tag);
-            el.className = className;
-            el.textContent = text || '';
-            answer.appendChild(el);
-            return el;
-        }
-
-        function askmidLink() {
-            var link = document.createElement('a');
-            link.href = 'https://enquiry.navigate.mib.org.uk/checkyourvehicle';
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = 'check on askMID';
-            link.addEventListener('click', function () {
-                if (navigator.clipboard && reg) {
-                    navigator.clipboard.writeText(reg).catch(function () {});
-                }
-            });
-            return link;
-        }
-
-        // a line of explanation, optionally ending in the link to askMID
-        function say(text, withLink) {
-            answer.textContent = '';
-            answer.hidden = false;
-            button.disabled = false;
-            var line = add('p', 'mb-0', text);
-            if (withLink) {
-                line.appendChild(askmidLink());
+        // a line under the button, optionally ending in a link to askMID
+        function say(text, linkText) {
+            var line = note.querySelector('p');
+            line.textContent = text;
+            if (linkText) {
+                var link = document.createElement('a');
+                link.href = form.dataset.askmid;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = linkText;
+                line.append(link, '.');
             }
-        }
-
-        function showSeen(info) {
-            var lines = [];
-            if (info && info.title !== undefined) {
-                lines.push('Title: ' + (info.title || '(none)'), 'Address: ' + info.address,
-                           'Frames: ' + (info.frames.length ? info.frames.join('\n        ') : 'none'),
-                           'Text: ' + (info.text || '(none)'));
-            } else if (info && info.error) {
-                lines.push(info.error);
-            }
-            if (!lines.length) {
-                return;
-            }
-            var details = add('details', 'small text-muted text-start mt-2');
-            details.appendChild(document.createElement('summary')).textContent = 'What askMID showed';
-            var pre = details.appendChild(document.createElement('pre'));
-            pre.className = 'mb-0 mt-1 p-2 bg-light border rounded';
-            pre.style.whiteSpace = 'pre-wrap';
-            pre.textContent = lines.join('\n');
-        }
-
-        function show(state) {
-            answer.textContent = '';
-            answer.hidden = false;
-            button.disabled = state.state === 'running';
-            if (state.state === 'running') {
-                var waiting = add('p', 'mb-1');
-                waiting.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>';
-                waiting.appendChild(document.createTextNode(' Checking ' + reg + ' with askMID...'));
-                add('p', 'small text-muted mb-0', 'This can take up to a minute.');
-            } else if (state.state === 'busy') {
-                say('Another check is running. Try again in a minute.');
-            } else if (state.state === 'done' && (state.status === 'INSURED' || state.status === 'NOT_INSURED')) {
-                var insured = state.status === 'INSURED';
-                var verdict = add('p', 'insurance-verdict mb-2 ' + (insured ? 'text-success' : 'text-danger'));
-                verdict.appendChild(document.createElement('i')).className =
-                    insured ? 'fas fa-check-circle' : 'fas fa-times-circle';
-                verdict.appendChild(document.createTextNode(insured ? ' Insured' : ' Not insured'));
-                add('p', 'mb-0', [reg, state.make_model].filter(Boolean).join(', '));
-                if (state.site_time) {
-                    add('p', 'small text-muted mb-0', 'askMID ' + state.site_time);
-                }
-                if (!insured) {
-                    add('p', 'small text-muted mt-2 mb-0', 'A new policy can take 7 days or more to appear. '
-                        + 'If you have cover, keep your policy details with you and ask your insurer.');
-                }
-            } else if (state.state === 'done') {
-                var why = state.reason ? ' (' + state.reason + ')' : '';
-                say((state.status === 'HUMAN_CHECK' ? 'askMID asked for a human check' : "Couldn't read askMID's answer")
-                    + why + ', so ', true);
-                showSeen(state.seen);
-            } else {
-                answer.hidden = true;
-            }
-        }
-
-        function follow(state) {
-            show(state);
-            if (state.state !== 'running') {
-                return;
-            }
-            if (++polls > 100) {
-                say("The check didn't finish. Try again, or ", true);
-                return;
-            }
-            setTimeout(function () {
-                fetch(url, {headers: {'X-Requested-With': 'fetch'}})
-                    .then(function (r) { return r.json(); })
-                    .then(follow)
-                    .catch(function () { say('Lost touch with the check. Press the button again to see if it finished, or ', true); });
-            }, 2000);
+            note.hidden = false;
         }
 
         // no spaces or symbols on the plate, and 7 characters at most
@@ -185,26 +89,21 @@
 
         form.addEventListener('submit', function (e) {
             e.preventDefault();
-            reg = input.value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 7);
+            var reg = input.value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 7);
             if (!/^(?=.*\d)[A-Z0-9]{2,7}$/.test(reg)) {
                 say("That doesn't look like a UK registration. Use 2 to 7 letters and numbers.");
                 input.focus();
                 return;
             }
             input.value = reg;
-            input.blur();
-            url = form.dataset.url.replace('A0', reg);
-            polls = 0;
-            show({state: 'running'});
-            fetch(url, {method: 'POST', headers: {'X-CSRFToken': token, 'X-Requested-With': 'fetch'}})
-                .then(function (r) {
-                    if (!r.ok) {
-                        throw new Error(r.status);
-                    }
-                    return r.json();
-                })
-                .then(follow)
-                .catch(function () { say("Couldn't start the check, so ", true); });
+            var copy = navigator.clipboard ? navigator.clipboard.writeText(reg) : Promise.reject();
+            copy.then(function () {
+                say(reg + " copied, ready to paste. If askMID didn't open, ", 'open it here');
+            }, function () {
+                say("Couldn't copy " + reg + ', so type it in on askMID. If askMID didn\'t open, ', 'open it here');
+            });
+            // opened straight away, while the browser still counts this as your tap
+            window.open(form.dataset.askmid, '_blank', 'noopener,noreferrer');
         });
     })();
 </script>

@@ -124,16 +124,9 @@
                             </p>
                             <p>
                                 <strong>Insurance:</strong>
-                                <span id="insurance" data-url="{% url 'insurance' dvla.registrationNumber %}" data-reg="{{ dvla.registrationNumber }}">
-                                    <span id="insurance-answer"></span>
-                                    <button type="button" id="insurance-button" class="btn btn-sm btn-outline-dark py-0">Check insurance</button>
-                                </span>
-                                <small class="d-block text-muted" id="insurance-note" hidden></small>
-                                <details class="small text-muted" id="insurance-seen" hidden>
-                                    <summary>What askMID showed</summary>
-                                    <pre class="mb-0 mt-1 p-2 bg-light border rounded" style="white-space: pre-wrap"></pre>
-                                </details>
-                                {% csrf_token %}
+                                <a href="{{ ASKMID_URL }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
+                                    Check on askMID <i class="fas fa-external-link-alt small"></i>
+                                </a>
                             </p>
                         </div>
                     </div>
@@ -219,123 +212,5 @@
             }
         });
     });
-</script>
-<script>
-    // On-demand askMID check, only when you press the button
-    (function () {
-        var box = document.getElementById('insurance');
-        if (!box) {
-            return;
-        }
-        var answer = document.getElementById('insurance-answer');
-        var button = document.getElementById('insurance-button');
-        var note = document.getElementById('insurance-note');
-        var seen = document.getElementById('insurance-seen');
-        var token = document.querySelector('input[name="csrfmiddlewaretoken"]').value;
-        var polls = 0;
-
-        function askmidLink() {
-            var link = document.createElement('a');
-            link.href = 'https://enquiry.navigate.mib.org.uk/checkyourvehicle';
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = 'check on askMID';
-            link.addEventListener('click', function () {
-                if (navigator.clipboard) {
-                    navigator.clipboard.writeText(box.dataset.reg).catch(function () {});
-                }
-            });
-            return link;
-        }
-
-        function say(text, withLink) {
-            note.textContent = text;
-            if (withLink) {
-                note.appendChild(askmidLink());
-            }
-            note.hidden = !text;
-        }
-
-        function verdict(insured) {
-            var icon = document.createElement('i');
-            icon.className = insured ? 'fas fa-check-circle text-success' : 'fas fa-times-circle text-danger';
-            var words = document.createElement('span');
-            words.className = insured ? 'text-success' : 'text-danger';
-            words.textContent = insured ? ' Insured' : ' Not insured';
-            answer.append(icon, words);
-        }
-
-        function showSeen(info) {
-            var lines = [];
-            if (info && info.title !== undefined) {
-                lines.push('Title: ' + (info.title || '(none)'), 'Address: ' + info.address,
-                           'Frames: ' + (info.frames.length ? info.frames.join('\n        ') : 'none'),
-                           'Text: ' + (info.text || '(none)'));
-            } else if (info && info.error) {
-                lines.push(info.error);
-            }
-            seen.querySelector('pre').textContent = lines.join('\n');
-            seen.hidden = !lines.length;
-        }
-
-        function show(state) {
-            answer.textContent = '';
-            button.hidden = false;
-            say('');
-            showSeen(null);
-            if (state.state === 'running') {
-                button.hidden = true;
-                answer.innerHTML = '<span class="spinner-border spinner-border-sm text-secondary" role="status"></span>'
-                    + ' <span class="text-muted">Checking with askMID...</span>';
-            } else if (state.state === 'busy') {
-                say('Another check is running. Try again in a minute.');
-            } else if (state.state === 'done' && (state.status === 'INSURED' || state.status === 'NOT_INSURED')) {
-                button.hidden = true;
-                verdict(state.status === 'INSURED');
-                var about = [state.make_model, state.site_time ? 'askMID ' + state.site_time : ''].filter(Boolean);
-                say(about.length ? '(' + about.join(', ') + ')' : '');
-            } else if (state.state === 'done') {
-                var why = state.reason ? ' (' + state.reason + ')' : '';
-                say((state.status === 'HUMAN_CHECK' ? 'askMID asked for a human check' : "Couldn't read askMID's answer")
-                    + why + ', so ', true);
-                showSeen(state.seen);
-            }
-        }
-
-        function follow(state) {
-            show(state);
-            if (state.state !== 'running') {
-                return;
-            }
-            if (++polls > 100) {
-                show({state: 'none'});
-                say("The check didn't finish. Try again, or ", true);
-                return;
-            }
-            setTimeout(function () {
-                fetch(box.dataset.url, {headers: {'X-Requested-With': 'fetch'}})
-                    .then(function (r) { return r.json(); })
-                    .then(follow)
-                    .catch(function () { say('Lost touch with the check. Refresh to see if it finished, or ', true); });
-            }, 2000);
-        }
-
-        button.addEventListener('click', function () {
-            if (!window.confirm('Is ' + box.dataset.reg + " your car?\n\naskMID's free check is only for your own vehicles.")) {
-                return;
-            }
-            polls = 0;
-            button.hidden = true;
-            fetch(box.dataset.url, {method: 'POST', headers: {'X-CSRFToken': token, 'X-Requested-With': 'fetch'}})
-                .then(function (r) { return r.json(); })
-                .then(follow)
-                .catch(function () { show({state: 'none'}); say("Couldn't start the check, so ", true); });
-        });
-
-        // pick up a check that's already running, or a recent answer
-        fetch(box.dataset.url, {headers: {'X-Requested-With': 'fetch'}})
-            .then(function (r) { return r.json(); })
-            .then(follow);
-    })();
 </script>
 {% endblock %}

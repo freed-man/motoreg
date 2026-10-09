@@ -72,6 +72,13 @@ def result(request, reg):
     return render(request, 'lookup/result.html', context)
 
 
+def insurance_page(request):
+    """/insurance/: type a reg, press the button, see if it's insured."""
+    return render(request, 'lookup/insurance.html', {
+        'reg': clean_reg(request.GET.get('reg'))[:7],
+    })
+
+
 @require_http_methods(['GET', 'POST'])
 def insurance(request, reg):
     """Start (POST) or follow (GET) the askMID check for a car."""

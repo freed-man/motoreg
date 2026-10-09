@@ -1,38 +1,34 @@
 """
-On-demand insurance check for your own cars, using tools/mid_check.py.
+On-demand insurance check for your own cars. The steps on askMID's site are
+in mib.py.
 
-The check runs in a background thread with a headless Chrome, because it
-takes longer than Heroku allows a web request to run; the result page asks
-for progress every couple of seconds. If askMID wants a human check, the
-script stops and the page says so: nothing here tries to get past it.
+The check runs in a background thread with a headless Chrome, because it can
+take the best part of a minute; the page asks for progress every couple of
+seconds. If askMID wants a human check, the check stops and the page says
+so: nothing here tries to get past it.
 """
 
-import importlib.util
 import logging
 import shutil
-import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from django.conf import settings
 from django.core.cache import cache
+
+from . import mib
 
 logger = logging.getLogger(__name__)
 
-SCRIPT = Path(settings.BASE_DIR) / 'tools' / 'mid_check.py'
-SCREENSHOTS = Path(tempfile.gettempdir()) / 'mid_results'
 HEROKU_CHROME = '/app/.chrome-for-testing/chrome-linux64/chrome'
+NO_BROWSER = (
+    'No browser is installed on the server: on Railway set '
+    'RAILPACK_PYTHON_PLAYWRIGHT_INSTALL=1 and redeploy')
 LOCK_KEY = 'insurance-lock'
 RUNNING_FOR = 3 * 60    # give up on a check that hasn't finished in 3 minutes
 RESULT_FOR = 15 * 60    # keep an answer 15 minutes before allowing a re-check
 FAILED_FOR = 10 * 60    # keep a failed check's explanation for 10 minutes
-RESULT_TIMEOUT = 45     # seconds the script waits for askMID's answer
 ANSWERS = ('INSURED', 'NOT_INSURED')
-
-
-class NeedsHuman(Exception):
-    """askMID asked for a human check, or the script couldn't find its way."""
 
 
 def _key(reg):
@@ -101,24 +97,28 @@ def describe_page(page):
         return {'error': f'{type(exc).__name__}: {exc}'[:200]}
 
 
-def load_script():
-    """tools/mid_check.py, fresh each time so an updated script is picked up."""
-    spec = importlib.util.spec_from_file_location('mid_check', SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def launch_browser(playwright):
-    """Heroku's Chrome for Testing when it's there, otherwise a local one."""
+    """
+    The browser Railway installs for Playwright, Heroku's Chrome for Testing
+    when that is there instead, or the Chrome on your own computer.
+    """
+    options = {
+        'headless': True,
+        'args': ['--disable-dev-shm-usage'],    # containers have little shared memory
+    }
     chrome = shutil.which('chrome') or (
         HEROKU_CHROME if Path(HEROKU_CHROME).exists() else None)
     if chrome:
-        return playwright.chromium.launch(executable_path=chrome, headless=True)
+        return playwright.chromium.launch(executable_path=chrome, **options)
     try:
-        return playwright.chromium.launch(headless=True)
-    except Exception:    # no Playwright Chromium downloaded: use installed Chrome
-        return playwright.chromium.launch(channel='chrome', headless=True)
+        return playwright.chromium.launch(**options)
+    except Exception as exc:    # no Playwright Chromium downloaded: use installed Chrome
+        why = str(exc).split('\n')[0]
+    try:
+        return playwright.chromium.launch(channel='chrome', **options)
+    except Exception:
+        logger.error('No browser could be started: %s', why)
+        raise RuntimeError(NO_BROWSER) from None
 
 
 @contextmanager
@@ -127,24 +127,21 @@ def browser_page():
     with sync_playwright() as playwright:
         browser = launch_browser(playwright)
         try:
-            yield browser.new_page(viewport={'width': 1200, 'height': 900})
+            # UK settings, so the time askMID prints on the result is UK time
+            yield browser.new_page(viewport={'width': 1200, 'height': 900},
+                                   locale='en-GB', timezone_id='Europe/London')
         finally:
             browser.close()
 
 
-def _stop(message):
-    raise NeedsHuman(message)
-
-
 def run_check(reg):
-    """One askMID check, headless. Returns mid_check's result dict."""
-    try:
-        mid = load_script()
-    except SystemExit as exc:    # the script exits if Playwright isn't installed
-        raise RuntimeError(str(exc)) from None
-    mid.pause = _stop    # on the server nobody can step in, so stop instead
+    """One askMID check, headless. Returns the answer, or why there isn't one."""
     with browser_page() as page:
-        result = mid.check_one(page, reg, mid.DEFAULT_URL, SCREENSHOTS, RESULT_TIMEOUT)
-        if result.get('status') not in ANSWERS:
-            result['seen'] = describe_page(page)
-        return result
+        try:
+            return mib.check(page, reg)
+        except mib.Stopped as exc:
+            return {
+                'status': 'ERROR',
+                'detail': f'{type(exc).__name__}: {exc}',
+                'seen': describe_page(page),
+            }

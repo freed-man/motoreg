@@ -9,7 +9,7 @@ import requests
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
-from . import insurance
+from . import insurance, mib
 from .details import (
     NO_MOT_HISTORY, build_details, countdown_text, span_text, ulez_verdict,
 )
@@ -568,26 +568,110 @@ class InsuranceTests(SimpleTestCase):
         self.assertEqual(insurance.status('AB12CDE')['status'], 'ERROR')
         self.assertEqual(insurance.status('AB12CDE')['reason'], 'boom')
 
-    def test_human_check_stops_the_script(self):
-        fake = types.SimpleNamespace(DEFAULT_URL='https://example.test',
-                                     pause=lambda message: None)
-
-        def check_one(page, reg, url, out_dir, timeout):
-            try:
-                fake.pause('The site wants a human check')
-            except Exception as exc:
-                return {'status': 'ERROR', 'detail': f'{type(exc).__name__}: {exc}'}
-            return {'status': 'INSURED', 'detail': 'pause did not stop it'}
-
-        fake.check_one = check_one
-        with patch('lookup.insurance.load_script', return_value=fake), \
-                patch('lookup.insurance.browser_page') as page:
+    def run_check_that_stops(self, error):
+        with patch('lookup.insurance.mib.check', side_effect=error), \
+                patch('lookup.insurance.browser_page') as page, \
+                patch('lookup.insurance.describe_page',
+                      return_value={'title': 'Just a moment...'}):
             page.return_value.__enter__.return_value = 'page'
-            result = insurance.run_check('AB12CDE')
+            return insurance.run_check('AB12CDE')
+
+    def test_human_check_stops_the_check(self):
+        result = self.run_check_that_stops(mib.NeedsHuman(mib.HUMAN_CHECK))
         self.assertTrue(result['detail'].startswith('NeedsHuman'))
         with patch('lookup.insurance.run_check', return_value=result):
             insurance._job('AB12CDE')
-        self.assertEqual(insurance.status('AB12CDE')['status'], 'HUMAN_CHECK')
+        state = insurance.status('AB12CDE')
+        self.assertEqual(state['status'], 'HUMAN_CHECK')
+        self.assertEqual(
+            state['reason'], 'a captcha or "verify you are human" screen is showing')
+        self.assertEqual(state['seen'], {'title': 'Just a moment...'})
+
+    def test_getting_stuck_says_where(self):
+        why = ('while entering the registration: '
+               'the site did not show what the check was waiting for')
+        result = self.run_check_that_stops(mib.Stopped(why))
+        with patch('lookup.insurance.run_check', return_value=result):
+            insurance._job('AB12CDE')
+        state = insurance.status('AB12CDE')
+        self.assertEqual((state['status'], state['reason']), ('ERROR', why))
+
+    def test_launch_tries_installed_chrome_then_gives_the_railway_hint(self):
+        playwright = Mock()
+        playwright.chromium.launch.side_effect = Exception("Executable doesn't exist")
+        with patch('lookup.insurance.shutil.which', return_value=None), \
+                self.assertLogs('lookup.insurance', 'ERROR'), \
+                self.assertRaisesMessage(RuntimeError, 'RAILPACK_PYTHON_PLAYWRIGHT_INSTALL=1'):
+            insurance.launch_browser(playwright)
+        self.assertEqual(playwright.chromium.launch.call_count, 2)
+
+    def test_no_browser_says_what_to_set(self):
+        with patch('lookup.insurance.browser_page',
+                   side_effect=RuntimeError(insurance.NO_BROWSER)):
+            with self.assertLogs('lookup.insurance', 'ERROR'):
+                insurance._job('AB12CDE')
+        self.assertIn('RAILPACK_PYTHON_PLAYWRIGHT_INSTALL=1',
+                      insurance.status('AB12CDE')['reason'])
+
+
+class InsurancePageTests(SimpleTestCase):
+    def test_page(self):
+        response = self.client.get('/insurance/')
+        self.assertContains(response, 'id="insurance-form"')
+        self.assertContains(response, 'data-url="/A0/insurance"')
+        self.assertContains(response, 'csrfmiddlewaretoken')
+
+    def test_reg_can_be_handed_in(self):
+        self.assertContains(
+            self.client.get('/insurance/?reg=ab12 cde'), 'value="AB12CDE"')
+
+    def test_without_the_slash(self):
+        self.assertRedirects(self.client.get('/insurance'), '/insurance/',
+                             status_code=301, fetch_redirect_response=False)
+
+    def test_link_in_the_navbar(self):
+        self.assertContains(self.client.get('/'), 'href="/insurance/"')
+
+
+SCREEN = """Check Your Vehicle
+Vehicle Registration Number
+AB12 CDE
+This vehicle is showing as
+{verdict}
+in Navigate today
+Make and model
+FORD FOCUS
+14:32:10 29 September 2026
+If your vehicle is not showing as insured, keep your policy details with you.
+"""
+
+
+class MibTests(SimpleTestCase):
+    def read(self, verdict='INSURED', reg='AB12CDE', fields=()):
+        return mib.read_result(
+            {'text': SCREEN.format(verdict=verdict), 'fields': list(fields)}, reg)
+
+    def test_insured(self):
+        self.assertEqual(self.read(), {
+            'status': 'INSURED', 'detail': 'INSURED', 'make_model': 'FORD FOCUS',
+            'site_time': '14:32:10 29 September 2026'})
+
+    def test_not_insured_is_not_read_as_insured(self):
+        self.assertEqual(self.read('NOT INSURED')['status'], 'NOT_INSURED')
+
+    def test_small_print_is_not_an_answer(self):
+        screen = {'text': 'AB12 CDE\nIf your vehicle is not showing as insured, wait.'}
+        with self.assertRaisesMessage(mib.Stopped, 'not a result'):
+            mib.read_result(screen, 'AB12CDE')
+        with self.assertRaisesMessage(mib.Stopped, 'not a result'):
+            self.read('BEING UPDATED')
+
+    def test_answer_for_another_plate_is_not_trusted(self):
+        with self.assertRaisesMessage(mib.Stopped, 'does not show the registration'):
+            self.read(reg='ZZ99ZZZ')
+
+    def test_plate_can_be_in_a_form_field(self):
+        self.assertEqual(self.read(reg='ZZ99ZZZ', fields=['zz99 zzz'])['status'], 'INSURED')
 
 
 class PasswordGateTests(SimpleTestCase):

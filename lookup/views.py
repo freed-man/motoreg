@@ -70,13 +70,6 @@ def result(request, reg):
     return render(request, 'lookup/result.html', context)
 
 
-def insurance_page(request):
-    """/insurance/: type a reg, and the button copies it and opens askMID."""
-    return render(request, 'lookup/insurance.html', {
-        'reg': clean_reg(request.GET.get('reg'))[:7],
-    })
-
-
 def unlock(request):
     """Password page, only used when SITE_PASSWORD is set."""
     next_url = request.POST.get('next') or request.GET.get('next') or '/'

@@ -173,9 +173,6 @@ class ResultPageTests(SimpleTestCase):
         self.assertContains(response, 'Tyre worn close to legal limit')
         self.assertContains(response, 'est. annual tax: £35')
         self.assertContains(response, 'Raw API response')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=1)
-        self.assertContains(
-            response, 'href="https://checkyourvehicle.org.uk/checkyourvehicle"')
         self.assertContains(response, '<span class="text-success">Compliant</span>')
         self.assertNotContains(response, 'Save to Profile')
         self.assertNotContains(response, 'Browse Services')
@@ -221,7 +218,7 @@ class ResultPageTests(SimpleTestCase):
         response = self.client.get('/AB12CDE')
         self.assertContains(
             response, 'href="https://tfl.gov.uk/modes/driving/check-your-vehicle/"')
-        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=2)
+        self.assertContains(response, 'data-copy-reg="AB12CDE"', count=1)
         self.assertContains(response, 'emissions checker didn')
         self.assertNotContains(response, 'LEZ (Scotland)')
 
@@ -231,7 +228,7 @@ class ResultPageTests(SimpleTestCase):
         self.assertIn('<strong>Colour:</strong> Blue</p>', html)
         self.assertIn('<strong>Fuel Type:</strong> Diesel</p>', html)
         spots = [html.index(f'<strong>{label}:</strong>')
-                 for label in ('MOT', 'Tax', 'ULEZ', 'Insurance')]
+                 for label in ('MOT', 'Tax', 'ULEZ')]
         self.assertEqual(spots, sorted(spots))
 
 
@@ -473,40 +470,6 @@ class TaxTests(SimpleTestCase):
     def test_pre_2001_engine_size(self):
         self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1400)['annual_rate'], 230)
         self.assertEqual(get_annual_tax(None, 'PETROL', 1998, 8, 1796)['annual_rate'], 375)
-
-
-
-class InsurancePageTests(SimpleTestCase):
-    def test_page(self):
-        response = self.client.get('/insurance/')
-        self.assertContains(response, 'id="insurance-form"')
-        self.assertContains(
-            response, 'data-askmid="https://checkyourvehicle.org.uk/checkyourvehicle"')
-        self.assertContains(response, 'Copy reg and open askMID')
-
-    def test_reg_can_be_handed_in(self):
-        self.assertContains(
-            self.client.get('/insurance/?reg=ab12 cde'), 'value="AB12CDE"')
-
-    def test_without_the_slash(self):
-        self.assertRedirects(self.client.get('/insurance'), '/insurance/',
-                             status_code=301, fetch_redirect_response=False)
-
-    def test_link_in_the_navbar(self):
-        self.assertContains(self.client.get('/'), 'href="/insurance/"')
-
-    @override_settings(ASKMID_URL='https://example.test/check')
-    @patch('lookup.views.fetch_vehicle')
-    def test_askmid_address_comes_from_settings(self, fetch):
-        fetch.return_value = (Result('ok', DVLA), Result('ok', MOT), Result('ok', LEZ_OK))
-        self.assertContains(
-            self.client.get('/insurance/'), 'data-askmid="https://example.test/check"')
-        self.assertContains(
-            self.client.get('/AB12CDE'), 'href="https://example.test/check"')
-
-    def test_site_does_not_run_the_check_itself(self):
-        self.assertEqual(self.client.get('/AB12CDE/insurance').status_code, 404)
-        self.assertEqual(self.client.post('/AB12CDE/insurance').status_code, 404)
 
 
 class PasswordGateTests(SimpleTestCase):

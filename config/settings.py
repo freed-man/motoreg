@@ -18,10 +18,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Shown in the navbar and page titles. This is the only place the name lives.
 SITE_NAME = 'motoreg'
 
-# askMID's free insurance check. It turns automated browsers away, so the site
-# can't run the check for you: its buttons copy the reg and open this page.
-ASKMID_URL = 'https://checkyourvehicle.org.uk/checkyourvehicle'
-
 SECRET_KEY = os.environ.get('SECRET_KEY')
 
 DEBUG = os.environ.get('DEVELOPMENT', '') == 'True'

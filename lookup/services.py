@@ -1,11 +1,3 @@
-"""
-Calls to the DVLA Vehicle Enquiry Service, the DVSA MOT History API and
-Transport Scotland's LEZ checker.
-
-All three are asked at the same time, and the DVSA OAuth token is cached
-until shortly before it expires instead of being fetched on every lookup.
-"""
-
 import logging
 import os
 from collections import namedtuple
@@ -16,7 +8,7 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 10  # seconds, per request
+TIMEOUT = 10
 LEZ_URL = 'https://vehicleemissionscheck.service.gov.scot/api'
 USER_AGENT = 'motoreg (personal vehicle lookup)'
 TOKEN_CACHE_KEY = 'dvsa-mot-token'
@@ -25,12 +17,10 @@ MOT_SETTINGS = (
     'MOT_SCOPE', 'MOT_API_BASE', 'MOT_API_KEY',
 )
 
-# status is one of: ok, not_found, auth, busy, not_configured, error
 Result = namedtuple('Result', 'status data')
 
 
 def fetch_vehicle(registration):
-    """Look a reg up everywhere in parallel. Returns (dvla, mot, lez)."""
     with ThreadPoolExecutor(max_workers=3) as pool:
         dvla = pool.submit(fetch_dvla, registration)
         mot = pool.submit(fetch_mot, registration)
@@ -61,7 +51,6 @@ def _result_from(response):
 
 
 def fetch_dvla(registration):
-    """Tax, MOT status, colour, CO2, V5C date and so on."""
     url = os.environ.get('DVLA_API_URL')
     api_key = os.environ.get('DVLA_API_KEY')
     if not url or not api_key:
@@ -79,7 +68,6 @@ def fetch_dvla(registration):
 
 
 def _mot_token(fresh=False):
-    """OAuth2 client credentials token for the MOT History API."""
     if not fresh:
         token = cache.get(TOKEN_CACHE_KEY)
         if token:
@@ -112,7 +100,6 @@ def _mot_token(fresh=False):
 
 
 def fetch_mot(registration):
-    """Model, first registration date and every MOT test."""
     if not all(os.environ.get(name) for name in MOT_SETTINGS):
         return Result('not_configured', None)
 
@@ -136,14 +123,11 @@ def fetch_mot(registration):
             return Result('error', None)
         if response.status_code != 401:
             break
-        # 401 on the first try means the cached token went stale early:
-        # loop once more with a fresh one
 
     return _result_from(response)
 
 
 def fetch_lez(registration):
-    """Scotland's LEZ checker: the same request its own page makes."""
     try:
         response = requests.post(
             LEZ_URL,

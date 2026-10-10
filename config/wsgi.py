@@ -1,5 +1,3 @@
-"""WSGI entry point, used by gunicorn (see Procfile)."""
-
 import os
 
 from django.core.wsgi import get_wsgi_application

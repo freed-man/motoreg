@@ -1,17 +1,18 @@
 import re
 
 from django.conf import settings
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.crypto import constant_time_compare
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_POST
 
+from . import insurance
 from .details import build_details
 from .middleware import unlock_token
 from .services import fetch_vehicle
 
-# UK regs are 2 to 7 letters and numbers, always with at least one number
 REG_PATTERN = re.compile(r'(?=.*\d)[A-Z0-9]{2,7}')
 
 DVLA_ERRORS = {
@@ -26,7 +27,6 @@ DVLA_ERRORS = {
 
 
 def clean_reg(value):
-    """'ab12 cde' -> 'AB12CDE'"""
     return re.sub(r'[^A-Z0-9]', '', (value or '').upper())
 
 
@@ -35,7 +35,6 @@ def home(request):
 
 
 def lookup(request):
-    """The home page form: tidy the reg up and go to its page."""
     reg = clean_reg(request.GET.get('reg'))
     if not REG_PATTERN.fullmatch(reg):
         return render(request, 'lookup/index.html', {
@@ -49,7 +48,6 @@ def lookup(request):
 
 
 def result(request, reg):
-    """/AB12CDE: look the vehicle up and show everything."""
     clean = clean_reg(reg)
     if not re.fullmatch(r'[A-Za-z0-9 ]+', reg) or not REG_PATTERN.fullmatch(
             clean):
@@ -67,11 +65,20 @@ def result(request, reg):
 
     context = build_details(dvla.data, mot.data, mot_status=mot.status,
                             lez=lez.data, lez_status=lez.status)
+    context.update(
+        registration=clean,
+        can_check_insurance=insurance.available(),
+        mib_page=insurance.MIB_PAGE,
+    )
     return render(request, 'lookup/result.html', context)
 
 
+@require_POST
+def insurance_check(request, reg):
+    return JsonResponse(insurance.row(insurance.check(reg)))
+
+
 def unlock(request):
-    """Password page, only used when SITE_PASSWORD is set."""
     next_url = request.POST.get('next') or request.GET.get('next') or '/'
     if not url_has_allowed_host_and_scheme(
             next_url, allowed_hosts={request.get_host()},

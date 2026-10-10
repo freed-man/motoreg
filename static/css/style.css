@@ -21,9 +21,7 @@ footer {
     overflow: auto;
 }
 
-/* Mobile responsive fixes */
 @media (max-width: 768px) {
-    /* Vehicle details: center the title and make logo */
     .card-title {
         text-align: center;
     }
@@ -32,7 +30,6 @@ footer {
         flex-wrap: wrap;
     }
 
-    /* Reduce top margins on mobile */
     .container.mt-5 {
         margin-top: 1.5rem !important;
     }

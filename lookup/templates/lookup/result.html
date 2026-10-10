@@ -1,15 +1,285 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ dvla.registrationNumber }} | {{ SITE_NAME }}{% endblock %}
+{% block title %}{{ registration }} | {{ SITE_NAME }}{% endblock %}
 
 {% block extra_css %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+    .vehicle-card,
+    .mot-history {
+        font-family: 'IBM Plex Sans', sans-serif;
+    }
+    .vehicle-card-title {
+        font-size: 28px;
+        font-weight: 500;
+        margin: 0;
+    }
+    .vehicle-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 0;
+        border-bottom: 0.5px solid rgba(0, 0, 0, 0.1);
+        font-size: 16px;
+        gap: 16px;
+    }
+    .vehicle-row:last-child {
+        border-bottom: none;
+    }
+    .vehicle-label {
+        color: #666;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .vehicle-label-long {
+        white-space: normal;
+    }
+    .vehicle-value {
+        font-weight: 700;
+        text-align: right;
+    }
+    .vehicle-divider {
+        border-top: 0.5px solid rgba(0, 0, 0, 0.1);
+    }
+    .vehicle-value-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+    }
+    .vehicle-sub {
+        color: #5c636a;
+        font-weight: 500;
+        font-size: 14px;
+    }
+    .vehicle-inline {
+        display: inline-flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        align-items: baseline;
+        column-gap: 6px;
+        text-align: right;
+    }
+    .vehicle-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+    }
+    .vc-more-hit {
+        cursor: pointer;
+    }
+    .vc-more-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        margin-left: 8px;
+        padding: 0;
+        border: 1px solid rgba(0, 0, 0, 0.25);
+        border-radius: 50%;
+        background: none;
+        color: #6c757d;
+        font-size: 11px;
+        vertical-align: middle;
+    }
+    .vc-more {
+        display: block;
+        margin-top: 4px;
+        text-align: right;
+    }
+    .vc-more .vehicle-sub {
+        display: block;
+    }
+    .vc-link {
+        padding: 0;
+        border: 0;
+        background: none;
+        color: #0d6efd;
+        font: inherit;
+    }
+    .tax-table {
+        margin: 6px 0 0 auto;
+        border-collapse: collapse;
+        font-size: 14px;
+        color: #6c757d;
+    }
+    .tax-table th,
+    .tax-table td {
+        padding: 3px 0 3px 12px;
+        text-align: right;
+        border-top: 1px solid rgba(0, 0, 0, 0.08);
+        font-weight: 400;
+    }
+    .tax-table thead th {
+        border-top: none;
+        font-weight: 600;
+    }
+    .tax-table thead th,
+    .tax-table td {
+        white-space: nowrap;
+    }
+    .tax-table th[scope="row"],
+    .tax-table thead th:first-child {
+        text-align: left;
+        padding-left: 0;
+    }
     .mot-toggle .fa-chevron-down {
         transition: transform 0.2s ease;
     }
     .mot-toggle.collapsed .fa-chevron-down {
         transform: rotate(-90deg);
+    }
+    .mot-history .card-body {
+        font-size: 15px;
+    }
+    .mot-test-line {
+        margin: 6px 0 4px;
+    }
+    .mot-defect {
+        margin: 4px 0 0 14px;
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+    }
+    .mileage-chart-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .mileage-chart-title {
+        font-weight: 600;
+    }
+    .mileage-chart-avg {
+        color: #6c757d;
+        font-size: 13px;
+    }
+    .mileage-chart-plot {
+        position: relative;
+        height: 150px;
+        margin: 18px 16px 26px 40px;
+    }
+    .mc-svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+    }
+    .mc-grid {
+        stroke: #e9ecef;
+        stroke-width: 1;
+    }
+    .mc-area {
+        fill: rgba(11, 94, 215, 0.08);
+    }
+    .mc-line {
+        fill: none;
+        stroke: #0b5ed7;
+        stroke-width: 2;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+    }
+    .mc-year {
+        position: absolute;
+        top: -10px;
+        bottom: -5px;
+        width: 0;
+        border-left: 1px dashed #adb5bd;
+    }
+    .mc-ylab,
+    .mc-xlab {
+        position: absolute;
+        font-size: 13px;
+        line-height: 1;
+        color: #6c757d;
+        white-space: nowrap;
+    }
+    .mc-ylab {
+        right: calc(100% + 8px);
+        transform: translateY(-50%);
+    }
+    .mc-xlab {
+        top: calc(100% + 9px);
+        transform: translateX(-50%);
+    }
+    .mc-visit {
+        position: absolute;
+        display: inline-flex;
+        gap: 2px;
+        margin: 0;
+        padding: 2px;
+        border: 0;
+        border-radius: 12px;
+        background: #fff;
+        transform: translate(-50%, -50%);
+        cursor: pointer;
+        line-height: 1;
+    }
+    .mc-res {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        color: #fff;
+        font-size: 10px;
+        box-shadow: 0 0 0 1.5px #fff;
+    }
+    .mc-ok {
+        background: #198754;
+    }
+    .mc-no {
+        background: #dc3545;
+    }
+    .mc-visit:focus {
+        outline: none;
+    }
+    .mc-visit:focus-visible {
+        box-shadow: 0 0 0 2px #212529;
+    }
+    .mc-tip {
+        position: absolute;
+        transform: translate(-50%, calc(-100% - 14px));
+        background: #212529;
+        color: #fff;
+        font-size: 13px;
+        line-height: 1.4;
+        padding: 6px 9px;
+        border-radius: 7px;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 2;
+    }
+    .mc-tip .mc-drop {
+        color: #ffb3ba;
+    }
+    .mc-compact .mc-visit {
+        padding: 1px;
+        gap: 3px;
+        align-items: center;
+    }
+    .mc-compact .mc-res {
+        width: 13px;
+        height: 13px;
+        font-size: 7px;
+    }
+    .mc-compact .mc-ok {
+        width: 9px;
+        height: 9px;
+    }
+    .mc-compact .mc-ok i {
+        display: none;
+    }
+    .mc-compact .mc-no + .mc-no,
+    .mc-compact .mc-ok + .mc-ok {
+        display: none;
     }
 </style>
 {% endblock %}
@@ -24,158 +294,127 @@
             <h2 class="mb-4 text-center text-md-start d-flex align-items-center">
                 <img src="{% static 'images/information.png' %}" alt="" height="40" class="me-2">Vehicle Details
             </h2>
-            <div class="card">
-                <div class="card-body">
+            <div class="card vehicle-card">
+                <div class="card-body" style="padding: 1.25rem 1.5rem;">
                     <div class="d-flex align-items-center mb-2">
                         <img src="{% static 'images/makes/' %}{{ make_logo }}.png"
-                            alt="{{ dvla.make }}" height="50" class="me-3"
+                            alt="{{ make }}" height="50" class="me-3"
                             onerror="this.style.display='none'">
-                        <h4 class="card-title mb-0">
-                            {{ dvla.yearOfManufacture }} {{ dvla.make }}{% if model %} {{ model }}{% endif %}
+                        <h4 class="card-title vehicle-card-title">
+                            {{ vc_year }} {{ make }}{% if model %} {{ model }}{% endif %}
                         </h4>
                     </div>
-                    <hr>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <p><strong>Registration:</strong> {{ dvla.registrationNumber }}</p>
-                            <p><strong>Colour:</strong> {{ dvla.colour|lower|capfirst }}</p>
-                            <p><strong>Fuel Type:</strong> {{ fuel_display|lower|capfirst }}</p>
-                            {% if dvla.engineCapacity %}
-                            <p><strong>Engine Size:</strong> {{ dvla.engineCapacity }}cc</p>
-                            {% endif %}
-                            <p>
-                                <strong>Year:</strong> {{ dvla.yearOfManufacture }}
-                                {% if vehicle_age_text %}
-                                <br><small class="text-muted">({{ vehicle_age_text }})</small>
-                                {% endif %}
-                            </p>
-                            {% if dvla.v5cDateFormatted %}
-                            <p>
-                                <strong>V5C Issued:</strong> {{ dvla.v5cDateFormatted }}
-                                <br><small class="text-muted">(current keeper for approx. {{ v5c_days_text }})</small>
-                            </p>
-                            {% endif %}
-                        </div>
-                        <div class="col-md-6">
-                            <p>
-                                <strong>MOT:</strong>
-                                {% if dvla.motStatus == "Valid" %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Valid</span>
-                                {% if dvla.motExpiryDateFormatted %}
-                                <br><small class="text-muted">(expires {{ dvla.motExpiryDateFormatted }} — {{ mot_days_text }})</small>
-                                {% endif %}
-                                {% elif dvla.motStatus == "No details held by DVLA" and new_car_mot %}
-                                {% if "overdue" in new_car_mot_days %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <span class="text-danger">Not valid</span>
-                                <br><small class="text-muted">(expired {{ new_car_mot_date }} — {{ new_car_mot_days }})</small>
-                                {% else %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Exempt (new vehicle)</span>
-                                <br><small class="text-muted">(first MOT due {{ new_car_mot_date }} — {{ new_car_mot_days }})</small>
-                                {% endif %}
-                                {% elif dvla.motStatus == "No details held by DVLA" %}
-                                <i class="fas fa-info-circle text-muted"></i>
-                                <span class="text-muted">No details held</span>
-                                {% else %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <span class="text-danger">{{ dvla.motStatus|default:"No details held" }}</span>
-                                {% if dvla.motExpiryDateFormatted %}
-                                <br><small class="text-muted">(expired {{ dvla.motExpiryDateFormatted }} — {{ mot_days_text }})</small>
-                                {% endif %}
-                                {% endif %}
-                            </p>
-                            <p>
-                                <strong>Tax:</strong>
-                                {% if dvla.taxStatus == "Taxed" %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Taxed</span>
-                                {% if dvla.taxDueDateFormatted %}
-                                <br><small class="text-muted">(due {{ dvla.taxDueDateFormatted }} — {{ tax_days_text }})</small>
-                                {% endif %}
-                                {% else %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <span class="text-danger">{{ dvla.taxStatus|default:"No details held" }}</span>
-                                {% if dvla.taxDueDateFormatted %}
-                                <br><small class="text-muted">(expired {{ dvla.taxDueDateFormatted }} — {{ tax_days_text }})</small>
-                                {% endif %}
-                                {% endif %}
-                                {% if tax_estimate.annual_rate %}
-                                <br><small class="text-muted">
-                                    (est. annual tax: £{{ tax_estimate.annual_rate }}{% if tax_estimate.six_month_rate %} / 6 months: £{{ tax_estimate.six_month_rate }}{% endif %})
-                                </small>
-                                {% endif %}
-                            </p>
-                            <p>
-                                <strong>ULEZ:</strong>
-                                {% if ulez_verdict == "compliant" %}
-                                <i class="fas fa-check-circle text-success"></i>
-                                <span class="text-success">Compliant</span>
-                                {% elif ulez_verdict == "not_compliant" %}
-                                <i class="fas fa-times-circle text-danger"></i>
-                                <span class="text-danger">Not compliant</span>
-                                {% else %}
-                                <a href="https://tfl.gov.uk/modes/driving/check-your-vehicle/" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ dvla.registrationNumber }}">
-                                    Check on TfL <i class="fas fa-external-link-alt small"></i>
-                                </a>
-                                <br><small class="text-muted">({{ ulez_notice }})</small>
-                                {% endif %}
-                            </p>
-                        </div>
+                    <div class="vehicle-divider"></div>
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Registration</span>
+                        <span class="vehicle-value">{{ registration }}</span>
+                    </div>
+                    {% if vc_year %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Year</span>
+                        <span class="vehicle-value vehicle-inline"><span>{{ vc_year }}</span>{% if vc_age %}<span class="vehicle-sub">{{ vc_age }}</span>{% endif %}</span>
+                    </div>
+                    {% endif %}
+                    {% if engine %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Engine</span>
+                        <span class="vehicle-value">{{ engine }}</span>
+                    </div>
+                    {% endif %}
+                    {% if fuel %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Fuel</span>
+                        <span class="vehicle-value">{{ fuel }}</span>
+                    </div>
+                    {% endif %}
+                    {% if colour %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Colour</span>
+                        <span class="vehicle-value vehicle-inline"><span>{{ colour }}</span><span class="vehicle-sub">(as registered)</span></span>
+                    </div>
+                    {% endif %}
+                    {% if vc_v5c %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">V5C issued</span>
+                        <span class="vehicle-value vehicle-inline"><span>{{ vc_v5c }}</span><span class="vehicle-sub">{{ vc_v5c_ago }}</span></span>
+                    </div>
+                    {% endif %}
+                    {% if vc_mot %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">MOT</span>
+                        <span class="vehicle-value vehicle-value-stack">
+                            <span class="vehicle-inline{% if vc_mot.more %} vc-more-hit{% endif %}"><span class="vehicle-status">{% if vc_mot.ok %}<i class="fas fa-check-circle text-success" aria-hidden="true"></i><span class="text-success">{{ vc_mot.label }}</span>{% elif vc_mot.ok is None %}<i class="fas fa-info-circle text-muted" aria-hidden="true"></i><span class="text-muted">{{ vc_mot.label }}</span>{% else %}<i class="fas fa-times-circle text-danger" aria-hidden="true"></i><span class="text-danger">{{ vc_mot.label }}</span>{% endif %}</span>{% if vc_mot.more %}<button type="button" class="vc-more-btn" aria-expanded="false" aria-controls="motMore" aria-label="More about the MOT"><i class="fas fa-plus" aria-hidden="true"></i></button>{% endif %}</span>
+                            {% if vc_mot.more %}<span class="vc-more" id="motMore" hidden><span class="vehicle-sub">{{ vc_mot.more }}</span></span>{% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                    {% if vc_tax %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Tax</span>
+                        <span class="vehicle-value vehicle-value-stack">
+                            <span class="vehicle-inline{% if vc_tax.more or vc_tax.table %} vc-more-hit{% endif %}"><span class="vehicle-status">{% if vc_tax.ok %}<i class="fas fa-check-circle text-success" aria-hidden="true"></i><span class="text-success">{{ vc_tax.label }}</span>{% else %}<i class="fas fa-times-circle text-danger" aria-hidden="true"></i><span class="text-danger">{{ vc_tax.label }}</span>{% endif %}</span>{% if vc_tax.more or vc_tax.table %}<button type="button" class="vc-more-btn" aria-expanded="false" aria-controls="taxMore" aria-label="More about the tax"><i class="fas fa-plus" aria-hidden="true"></i></button>{% endif %}</span>
+                            {% if vc_tax.more or vc_tax.table %}<span class="vc-more" id="taxMore" hidden>
+                                {% if vc_tax.more %}<span class="vehicle-sub">{{ vc_tax.more }}</span>{% endif %}
+                                {% if vc_tax.table.note %}<span class="vehicle-sub">{{ vc_tax.table.note }}</span>{% endif %}
+                                {% if vc_tax.table.rows %}<table class="tax-table"><thead><tr><th scope="col">To renew</th>{% for c in vc_tax.table.cols %}<th scope="col">{{ c }}</th>{% endfor %}</tr></thead><tbody>{% for r in vc_tax.table.rows %}<tr>{% for cell in r %}{% if forloop.first %}<th scope="row">{{ cell }}</th>{% else %}<td>{{ cell }}</td>{% endif %}{% endfor %}</tr>{% endfor %}</tbody></table>{% endif %}
+                            </span>{% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                    {% if vc_ulez %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label vehicle-label-long">London ULEZ / Scottish LEZ</span>
+                        <span class="vehicle-value vehicle-inline">
+                            {% if vc_ulez.ok %}<span class="vehicle-status"><i class="fas fa-check-circle text-success" aria-hidden="true"></i><span class="text-success">{{ vc_ulez.label }}</span></span>
+                            {% elif vc_ulez.ok is False %}<span class="vehicle-status"><i class="fas fa-times-circle text-danger" aria-hidden="true"></i><span class="text-danger">{{ vc_ulez.label }}</span></span>
+                            {% else %}<a href="{{ vc_ulez.link }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ registration }}">Check on TfL <i class="fas fa-external-link-alt small" aria-hidden="true"></i></a>
+                            {% if vc_ulez.notice %}<span class="vehicle-sub">{{ vc_ulez.notice }}</span>{% endif %}{% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                    <div class="vehicle-row">
+                        <span class="vehicle-label">Insurance</span>
+                        <span class="vehicle-value vehicle-value-stack" role="status">
+                            <span class="vehicle-inline"{% if can_check_insurance %} id="insurance" data-url="{% url 'insurance' registration %}" data-token="{{ csrf_token }}"{% endif %}><a href="{{ mib_page }}" target="_blank" rel="noopener noreferrer" class="text-decoration-none" data-copy-reg="{{ registration }}">Check on MIB <i class="fas fa-external-link-alt small" aria-hidden="true"></i></a></span>
+                            <span class="vc-more" id="insuranceMore" hidden></span>
+                        </span>
                     </div>
                 </div>
             </div>
 
             <h3 class="mt-4 mb-3">
                 <a class="mot-toggle text-decoration-none text-dark d-flex align-items-center" data-bs-toggle="collapse" href="#motHistory" role="button" aria-expanded="true" aria-controls="motHistory">
-                    <img src="{% static 'images/mot.png' %}" alt="" height="40" class="me-2">MOT History ({{ mot_tests|length }}) <i class="fas fa-chevron-down small ms-2"></i>
+                    <img src="{% static 'images/mot.png' %}" alt="" height="40" class="me-2">MOT History ({{ vc_mot_tests|length }}) <i class="fas fa-chevron-down small ms-2"></i>
                 </a>
             </h3>
-            <div class="collapse show" id="motHistory">
-                {% for test in mot_tests %}
+            <div class="collapse show mot-history" id="motHistory">
+                {% if vc_mileage_chart %}{% with c=vc_mileage_chart %}
                 <div class="card mb-2">
                     <div class="card-body">
-                        {% if test.testResult == "PASSED" %}
-                        <span class="badge bg-success mb-2">PASSED</span>
-                        {% else %}
-                        <span class="badge bg-danger mb-2">FAILED</span>
-                        {% endif %}
-                        <div class="mb-2">
-                            <strong>{{ test.completedDateFormatted }}</strong>
-                            {% if test.mileageFormatted %}
-                            <span class="ms-2 text-muted">— {{ test.mileageFormatted }} {{ test.odometerUnit }}</span>
-                            {% if test.mileage_diff is not None %}
-                            {% if test.mileage_diff >= 0 %}
-                            <span class="ms-1 text-muted"><small>(+{{ test.mileage_diff_formatted }})</small></span>
-                            {% else %}
-                            <span class="ms-1 text-danger"><small><i class="fas fa-exclamation-triangle"></i> -{{ test.mileage_diff_formatted }} — mileage discrepancy</small></span>
-                            {% endif %}
-                            {% endif %}
-                            {% endif %}
+                        <div class="mileage-chart-head"><span class="mileage-chart-title">Mileage at each MOT</span>{% if c.avg %}<span class="mileage-chart-avg">about {{ c.avg }} miles a year</span>{% endif %}</div>
+                        <div class="mileage-chart-plot" role="group" aria-label="{{ c.summary }}">
+                            <svg class="mc-svg" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                                {% for y in c.yticks %}<line class="mc-grid" x1="0" x2="1000" y1="{{ y.y }}" y2="{{ y.y }}" vector-effect="non-scaling-stroke"></line>{% endfor %}
+                                <path class="mc-area" d="{{ c.area }}"></path>
+                                <polyline class="mc-line" points="{{ c.line }}" vector-effect="non-scaling-stroke"></polyline>
+                            </svg>
+                            {% for x in c.years %}<span class="mc-year" style="left: {{ x }}%" aria-hidden="true"></span>{% endfor %}
+                            {% for y in c.yticks %}<span class="mc-ylab" style="top: {{ y.y }}%" aria-hidden="true">{{ y.label }}</span>{% endfor %}
+                            {% for x in c.xticks %}<span class="mc-xlab" style="left: {{ x.x }}%" aria-hidden="true">{{ x.label }}</span>{% endfor %}
+                            {% for v in c.visits %}<button type="button" class="mc-visit" style="left: {{ v.x }}%; top: {{ v.y }}%" aria-label="{{ v.label }}" data-lines="{{ v.lines|join:'|' }}" data-drop="{% if v.drop %}1{% endif %}">{% for ok in v.results %}<span class="mc-res {% if ok %}mc-ok{% else %}mc-no{% endif %}"><i class="fas fa-{% if ok %}check{% else %}times{% endif %}" aria-hidden="true"></i></span>{% endfor %}</button>{% endfor %}
+                            <div class="mc-tip" role="status" hidden></div>
                         </div>
-                        {% if test.majors %}
-                        <div class="mb-1">
-                            <span class="badge bg-danger">Major</span>
-                        </div>
-                        {% for defect in test.majors %}
-                        <div class="ms-3 mb-1">
-                            <i class="fas fa-times-circle text-danger"></i>
-                            <span class="text-danger">{{ defect.text }}</span>
-                        </div>
-                        {% endfor %}
-                        {% endif %}
-                        {% if test.advisories %}
-                        <div class="mb-1">
-                            <span class="badge bg-warning text-dark">Advisory</span>
-                        </div>
-                        {% for defect in test.advisories %}
-                        <div class="ms-3 mb-1">
-                            <i class="fas fa-exclamation-circle text-warning"></i>
-                            <span>{{ defect.text }}</span>
-                        </div>
-                        {% endfor %}
-                        {% endif %}
+                    </div>
+                </div>
+                {% endwith %}{% endif %}
+                {% for t in vc_mot_tests %}
+                <div class="card mb-2">
+                    <div class="card-body">
+                        {% if t.passed %}<span class="badge bg-success">PASSED</span>{% else %}<span class="badge bg-danger">FAILED</span>{% endif %}
+                        <div class="mot-test-line"><strong>{{ t.date }}</strong>{% if t.mileage %}<span class="text-muted"> &middot; {{ t.mileage }}</span>{% if t.diff %}{% if t.diff_negative %}<span class="text-danger small"> <i class="fas fa-exclamation-triangle" aria-hidden="true"></i> {{ t.diff }}, mileage discrepancy</span>{% else %}<span class="text-muted small"> ({{ t.diff }})</span>{% endif %}{% endif %}{% endif %}</div>
+                        {% if t.fails %}<div class="mt-2"><span class="badge bg-danger">Major</span></div>{% for d in t.fails %}<div class="mot-defect text-danger"><i class="fas fa-times-circle" aria-hidden="true"></i><span>{{ d.text }}</span></div>{% endfor %}{% endif %}
+                        {% if t.repaired %}<div class="mt-2"><span class="badge bg-secondary">Repaired during the test</span></div>{% for d in t.repaired %}<div class="mot-defect text-muted"><i class="fas fa-wrench" aria-hidden="true"></i><span>{{ d }}</span></div>{% endfor %}{% endif %}
+                        {% if t.advisories %}<div class="mt-2"><span class="badge bg-warning text-dark">Advisory</span></div>{% for d in t.advisories %}<div class="mot-defect"><i class="fas fa-exclamation-circle text-warning" aria-hidden="true"></i><span>{{ d }}</span></div>{% endfor %}{% endif %}
                     </div>
                 </div>
                 {% endfor %}
@@ -198,13 +437,143 @@
 
 {% block extra_js %}
 <script>
-    // TfL can't take the reg in its link, so copy it on the way out
-    document.querySelectorAll('[data-copy-reg]').forEach(function (link) {
-        link.addEventListener('click', function () {
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(link.dataset.copyReg).catch(function () {});
-            }
-        });
+(function () {
+    function toggleMore(button) {
+        var box = document.getElementById(button.getAttribute('aria-controls'));
+        var open = button.getAttribute('aria-expanded') !== 'true';
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        button.setAttribute('aria-label', (open ? 'Less' : 'More') + button.getAttribute('aria-label').replace(/^(More|Less)/, ''));
+        if (box) { box.hidden = !open; }
+        var icon = button.querySelector('i');
+        if (icon) { icon.className = open ? 'fas fa-minus' : 'fas fa-plus'; }
+    }
+
+    document.addEventListener('click', function (event) {
+        var link = event.target.closest('[data-copy-reg]');
+        if (link && navigator.clipboard) {
+            navigator.clipboard.writeText(link.dataset.copyReg).catch(function () {});
+        }
+        var hit = event.target.closest('.vc-more-hit');
+        var button = hit && hit.querySelector('.vc-more-btn');
+        if (button) { toggleMore(button); }
     });
+
+    document.querySelectorAll('.mileage-chart-plot').forEach(function (plot) {
+        var tip = plot.querySelector('.mc-tip'), shown = null;
+        if (!tip) { return; }
+        var visitCount = plot.querySelectorAll('.mc-visit').length;
+        function fit() {
+            var width = plot.clientWidth;
+            if (!width || !visitCount) { return; }
+            plot.classList.toggle('mc-compact', width / visitCount < 28);
+        }
+        if (window.ResizeObserver) { new ResizeObserver(fit).observe(plot); }
+        else { window.addEventListener('resize', fit); document.addEventListener('shown.bs.collapse', fit); }
+        fit();
+        function show(visit) {
+            var lines = (visit.getAttribute('data-lines') || '').split('|');
+            tip.textContent = '';
+            lines.forEach(function (text, index) {
+                var row = document.createElement('div');
+                row.textContent = text;
+                if (index === 2 && visit.getAttribute('data-drop')) { row.className = 'mc-drop'; }
+                tip.appendChild(row);
+            });
+            tip.hidden = false; shown = visit;
+            var half = tip.offsetWidth / 2, width = plot.clientWidth || 1;
+            tip.style.left = Math.max(half - 40, Math.min(width - half + 16, visit.offsetLeft)) + 'px';
+            tip.style.top = visit.offsetTop + 'px';
+        }
+        function hide() { tip.hidden = true; shown = null; }
+        var byPointer = false;
+        plot.addEventListener('pointerdown', function () { byPointer = true; }, true);
+        plot.addEventListener('mousedown', function () { byPointer = true; }, true);
+        document.addEventListener('keydown', function () { byPointer = false; }, true);
+        plot.querySelectorAll('.mc-visit').forEach(function (visit) {
+            visit.addEventListener('click', function (event) { event.stopPropagation(); if (shown === visit) { hide(); } else { show(visit); } });
+            visit.addEventListener('focus', function () { if (!byPointer) { show(visit); } });
+            visit.addEventListener('blur', function () { if (!byPointer && shown === visit) { hide(); } });
+            visit.addEventListener('keydown', function (event) { if (event.key === 'Escape') { hide(); } });
+        });
+        document.addEventListener('click', function () { if (shown) { hide(); } });
+    });
+
+    var main = document.getElementById('insurance');
+    if (!main) { return; }
+    var more = document.getElementById('insuranceMore');
+    var link = main.querySelector('a');
+
+    function make(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) { node.className = className; }
+        if (text) { node.textContent = text; }
+        return node;
+    }
+    function icon(name) {
+        var node = make('i', 'fas fa-' + name);
+        node.setAttribute('aria-hidden', 'true');
+        return node;
+    }
+    function show(nodes, lines) {
+        lines = lines || [];
+        main.replaceChildren.apply(main, nodes);
+        main.classList.toggle('vc-more-hit', lines.length > 0);
+        more.hidden = true;
+        more.replaceChildren.apply(more, lines.map(function (line) {
+            return make('span', 'vehicle-sub', line);
+        }));
+    }
+    function withNotice(node, notice) {
+        show(notice ? [node, make('span', 'vehicle-sub', notice)] : [node]);
+    }
+    function again(notice) {
+        var button = make('button', 'vc-link', 'Try again');
+        button.type = 'button';
+        button.addEventListener('click', run);
+        withNotice(button, notice);
+    }
+    function checking() {
+        var status = make('span', 'vehicle-status');
+        var spinner = make('span', 'spinner-border spinner-border-sm text-secondary');
+        spinner.setAttribute('aria-hidden', 'true');
+        status.append(spinner, make('span', 'text-muted', 'Checking with MIB'));
+        show([status]);
+    }
+    function answer(data) {
+        if (data.ok !== true && data.ok !== false) {
+            if (data.retry) { again(data.notice); } else { withNotice(link, data.notice); }
+            return;
+        }
+        var status = make('span', 'vehicle-status');
+        status.append(
+            icon(data.ok ? 'check-circle text-success' : 'times-circle text-danger'),
+            make('span', data.ok ? 'text-success' : 'text-danger', data.label));
+        var nodes = [status];
+        if (data.more && data.more.length) {
+            var button = make('button', 'vc-more-btn');
+            button.type = 'button';
+            button.setAttribute('aria-expanded', 'false');
+            button.setAttribute('aria-controls', 'insuranceMore');
+            button.setAttribute('aria-label', 'More about the insurance');
+            button.append(icon('plus'));
+            nodes.push(button);
+        }
+        show(nodes, data.more);
+    }
+    function run() {
+        checking();
+        fetch(main.dataset.url, {
+            method: 'POST',
+            headers: {'X-CSRFToken': main.dataset.token},
+            credentials: 'same-origin'
+        }).then(function (response) {
+            return response.json();
+        }).then(answer).catch(function () {
+            again("(couldn't check right now)");
+        });
+    }
+
+    run();
+})();
 </script>
 {% endblock %}

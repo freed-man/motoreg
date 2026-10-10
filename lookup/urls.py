@@ -6,7 +6,7 @@ urlpatterns = [
     path('', views.home, name='home'),
     path('lookup/', views.lookup, name='lookup'),
     path('unlock/', views.unlock, name='unlock'),
-    # /AB12CDE shows that vehicle. Only single path segments containing a
-    # digit get here (every UK reg has one), so /admin and bots' guesses 404.
+    re_path(r'^(?P<reg>(?=[A-Z0-9]*\d)[A-Z0-9]{2,7})/insurance$',
+            views.insurance_check, name='insurance'),
     re_path(r'^(?=[^/]*\d)(?P<reg>[^/]+)/?$', views.result, name='result'),
 ]

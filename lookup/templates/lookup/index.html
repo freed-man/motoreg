@@ -161,7 +161,6 @@
         hintDisplay.style.display = 'none';
     }
 
-    // a reg handed back after an error is already on the plate
     if (regInput.value !== '' || document.activeElement === regInput) {
         stopHint();
     } else {
@@ -180,8 +179,6 @@
         }
     });
 
-    // no spaces or symbols on the plate, and 7 characters at most
-    // (pasting "AB12 CDE" still works)
     regInput.addEventListener('input', function() {
         var cleaned = regInput.value.replace(/[^a-z0-9]/gi, '').slice(0, 7);
         if (cleaned !== regInput.value) {

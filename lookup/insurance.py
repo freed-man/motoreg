@@ -1,6 +1,9 @@
 import logging
 import os
 import re
+import socket
+import subprocess
+import sys
 import threading
 import time
 from importlib.util import find_spec
@@ -13,21 +16,20 @@ MIB_PAGE = 'https://enquiry.navigate.mib.org.uk/checkyourvehicle'
 MIB_URL = os.environ.get('MIB_URL', MIB_PAGE)
 HEADLESS = os.environ.get('MIB_HEADLESS', 'true').strip().lower() != 'false'
 
-PAUSES = {'limit': 30 * 60, 'unavailable': 5 * 60}
 TURN_SECONDS = 20
 
 NOTICES = {
     'limit': "MIB's search limit has been reached, try again later",
     'busy': 'another check is running, try again in a minute',
     'unknown': "couldn't check right now",
-    'unavailable': 'no browser on this server to check with',
+    'uninstalled': 'no browser installed on this server',
+    'unavailable': "the browser wouldn't start on this server",
 }
 RETRY = ('busy', 'unknown')
 
 _one_at_a_time = threading.Lock()
 _memory = threading.Lock()
 _answers = {}
-_pause = {'until': 0.0, 'status': ''}
 
 _SUBMIT_ENABLED_JS = """() => {
     const button = document.querySelector('[data-testid="continueBtn"]');
@@ -57,7 +59,7 @@ def available():
 
 def check(registration):
     if not available():
-        return {'status': 'unavailable'}
+        return {'status': 'uninstalled'}
     answer = _remembered(registration)
     if answer:
         return answer
@@ -67,13 +69,9 @@ def check(registration):
         answer = _remembered(registration)
         if answer:
             return answer
-        paused = _paused()
-        if paused:
-            return {'status': paused}
-        result = lookup(registration)
+        return _remember(registration, lookup(registration))
     finally:
         _one_at_a_time.release()
-    return _remember(registration, result)
 
 
 def row(result):
@@ -106,9 +104,12 @@ def lookup(registration):
     except SearchLimitReached:
         logger.warning('MIB search limit reached.')
         return {'status': 'limit'}
-    except BrowserUnavailable:
+    except BrowserUnavailable as error:
         logger.exception('The browser for the MIB check could not start.')
-        return {'status': 'unavailable'}
+        cause = error.__cause__
+        missing = (isinstance(cause, FileNotFoundError)
+                   or "Executable doesn't exist" in str(cause))
+        return {'status': 'uninstalled' if missing else 'unavailable'}
     except Exception:
         logger.exception('MIB lookup failed.')
         return {'status': 'unknown'}
@@ -127,13 +128,6 @@ def _remembered(registration):
     return None
 
 
-def _paused():
-    with _memory:
-        if time.monotonic() < _pause['until']:
-            return _pause['status']
-    return ''
-
-
 def _remember(registration, result):
     status = result['status']
     with _memory:
@@ -145,15 +139,46 @@ def _remember(registration, result):
                         if kept['day'] != today]:
                 del _answers[old]
             _answers[registration] = {'day': today, 'answer': result}
-        elif status in PAUSES:
-            _pause.update(
-                until=time.monotonic() + PAUSES[status], status=status)
     return result
+
+
+def _open_display():
+    if HEADLESS or not sys.platform.startswith('linux'):
+        return
+    display = os.environ.setdefault('DISPLAY', ':99')
+    if not display.startswith(':'):
+        return
+    path = f"/tmp/.X11-unix/X{display[1:].partition('.')[0]}"
+    if _display_is_up(path):
+        return
+    subprocess.Popen(
+        ['Xvfb', display, '-screen', '0', '1280x800x24',
+         '-nolisten', 'tcp', '-noreset'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        if _display_is_up(path):
+            break
+        time.sleep(0.1)
+
+
+def _display_is_up(path):
+    for address in (path, '\0' + path):
+        try:
+            with socket.socket(socket.AF_UNIX) as probe:
+                probe.connect(address)
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def _read_result_page(registration):
     from playwright.sync_api import sync_playwright
 
+    try:
+        _open_display()
+    except Exception as error:
+        raise BrowserUnavailable from error
     with sync_playwright() as playwright:
         try:
             browser = playwright.chromium.launch(headless=HEADLESS)

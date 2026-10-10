@@ -1,6 +1,7 @@
 import copy
 import os
 import re
+import runpy
 import sys
 import threading
 import time
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 import requests
+from django.conf import settings
 from django.core.cache import cache
 from django.test import Client, SimpleTestCase, override_settings
 
@@ -820,22 +822,15 @@ CHECKED = datetime(2026, 10, 10, 13, 32, tzinfo=timezone.utc)
 LONDON = ZoneInfo('Europe/London')
 
 
-class Clock:
-    def __init__(self):
-        self.now = 5000.0
-
-    def monotonic(self):
-        return self.now
-
-
 class InsuranceTestCase(SimpleTestCase):
     def setUp(self):
         insurance._answers.clear()
-        insurance._pause.update(until=0.0, status='')
-        self.clock = Clock()
         self.uk_time(2026, 10, 10, 13, 0)
+        self.subprocess = Mock()
+        self.time = Mock()
         for target, value in (
-                ('lookup.insurance.time', self.clock),
+                ('lookup.insurance.subprocess', self.subprocess),
+                ('lookup.insurance.time', self.time),
                 ('lookup.insurance.available', lambda: True),
                 ('django.utils.timezone.now', self.utc_now)):
             patcher = patch(target, value)
@@ -970,29 +965,24 @@ class InsuranceCheckTests(InsuranceTestCase):
 
     def test_no_browser_means_no_lookup(self, lookup):
         with patch('lookup.insurance.available', return_value=False):
-            self.assertEqual(insurance.check('AB12CDE'), {'status': 'unavailable'})
+            self.assertEqual(insurance.check('AB12CDE'), {'status': 'uninstalled'})
         lookup.assert_not_called()
 
-    def test_mibs_limit_pauses_every_check(self, lookup):
-        lookup.return_value = {'status': 'limit'}
+    def test_mibs_limit_does_not_stop_the_next_check(self, lookup):
+        lookup.side_effect = [{'status': 'limit'}, {'status': 'limit'},
+                              {'status': 'insured', 'vehicle': ''}]
         self.assertEqual(insurance.check('AB12CDE'), {'status': 'limit'})
-        lookup.return_value = {'status': 'insured', 'vehicle': ''}
-        self.clock.now += insurance.PAUSES['limit'] - 1
-        self.assertEqual(insurance.check('XY34ZZZ'), {'status': 'limit'})
-        self.assertEqual(lookup.call_count, 1)
-        self.clock.now += 2
+        self.assertEqual(insurance.check('AB12CDE'), {'status': 'limit'})
         self.assertEqual(insurance.check('XY34ZZZ')['status'], 'insured')
-        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(lookup.call_count, 3)
 
-    def test_browser_that_will_not_start_is_left_alone_for_a_while(self, lookup):
-        lookup.return_value = {'status': 'unavailable'}
-        for _ in range(50):
-            self.assertEqual(insurance.check('AB12CDE'), {'status': 'unavailable'})
-        self.assertEqual(lookup.call_count, 1)
-        lookup.return_value = {'status': 'uninsured'}
-        self.clock.now += insurance.PAUSES['unavailable'] + 1
+    def test_browser_that_will_not_start_is_tried_again_each_time(self, lookup):
+        lookup.side_effect = [{'status': 'unavailable'}, {'status': 'unavailable'},
+                              {'status': 'uninsured'}]
+        self.assertEqual(insurance.check('AB12CDE'), {'status': 'unavailable'})
+        self.assertEqual(insurance.check('AB12CDE'), {'status': 'unavailable'})
         self.assertEqual(insurance.check('AB12CDE')['status'], 'uninsured')
-        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(lookup.call_count, 3)
 
     def test_busy_while_another_check_holds_the_browser(self, lookup):
         with patch('lookup.insurance.TURN_SECONDS', 0.01):
@@ -1033,10 +1023,16 @@ class InsuranceCheckTests(InsuranceTestCase):
 
 
 class InsuranceLookupTests(InsuranceTestCase):
-    def playwright(self, launch):
+    def playwright(self, launch, started=None):
         manager = MagicMock()
         manager.__enter__.return_value = Mock(chromium=Mock(launch=launch))
-        module = Mock(sync_playwright=Mock(return_value=manager))
+
+        def start():
+            if started:
+                started()
+            return manager
+
+        module = Mock(sync_playwright=start)
         return patch.dict(
             sys.modules, {'playwright': Mock(), 'playwright.sync_api': module})
 
@@ -1054,8 +1050,15 @@ class InsuranceLookupTests(InsuranceTestCase):
         browser.close.assert_called_once_with()
         self.assertEqual(logs.output, ['INFO:lookup.insurance:MIB lookup finished: insured'])
 
+    def test_browser_that_is_not_installed(self):
+        launch = Mock(side_effect=RuntimeError(
+            "BrowserType.launch: Executable doesn't exist at /ms-playwright/chromium"))
+        with self.playwright(launch), self.assertLogs('lookup.insurance', 'ERROR'):
+            self.assertEqual(insurance.lookup('AB12CDE'), {'status': 'uninstalled'})
+
     def test_browser_that_will_not_start(self):
-        launch = Mock(side_effect=RuntimeError("Executable doesn't exist"))
+        launch = Mock(side_effect=RuntimeError(
+            'BrowserType.launch: Target page, context or browser has been closed'))
         with self.playwright(launch), self.assertLogs('lookup.insurance', 'ERROR'):
             self.assertEqual(insurance.lookup('AB12CDE'), {'status': 'unavailable'})
 
@@ -1080,10 +1083,111 @@ class InsuranceLookupTests(InsuranceTestCase):
         showed.assert_not_called()
         browser.close.assert_called_once_with()
 
+    def test_display_is_opened_before_playwright_starts(self):
+        order = []
+        launch = Mock(side_effect=lambda **options: order.append('browser') or Mock())
+        with self.playwright(launch, lambda: order.append('playwright')), \
+                patch('lookup.insurance._open_display',
+                      side_effect=lambda: order.append('display')), \
+                patch('lookup.insurance._click_through', return_value=MIB_INSURED), \
+                self.assertLogs('lookup.insurance', 'INFO'):
+            insurance.lookup('AB12CDE')
+        self.assertEqual(order, ['display', 'playwright', 'browser'])
+
+    def test_no_display_to_be_had_means_no_browser(self):
+        launch = Mock()
+        self.subprocess.Popen.side_effect = FileNotFoundError('Xvfb')
+        with self.playwright(launch), \
+                patch('lookup.insurance.HEADLESS', False), \
+                patch('lookup.insurance.sys', Mock(platform='linux')), \
+                patch('lookup.insurance._display_is_up', return_value=False), \
+                patch.dict(os.environ, {'DISPLAY': ':99'}), \
+                self.assertLogs('lookup.insurance', 'ERROR'):
+            self.assertEqual(insurance.lookup('AB12CDE'), {'status': 'uninstalled'})
+        launch.assert_not_called()
+
     def test_headless_unless_told_otherwise(self):
         self.assertIs(insurance.HEADLESS, os.environ.get(
             'MIB_HEADLESS', 'true').strip().lower() != 'false')
         self.assertEqual(insurance.MIB_PAGE, 'https://enquiry.navigate.mib.org.uk/checkyourvehicle')
+
+
+class InsuranceDisplayTests(InsuranceTestCase):
+    def open_display(self, up, headless=False, platform='linux', display=':99'):
+        answers = iter(up)
+        with patch('lookup.insurance.HEADLESS', headless), \
+                patch('lookup.insurance.sys', Mock(platform=platform)), \
+                patch('lookup.insurance._display_is_up',
+                      side_effect=lambda path: next(answers)) as probe, \
+                patch.dict(os.environ):
+            os.environ.pop('DISPLAY', None)
+            if display:
+                os.environ['DISPLAY'] = display
+            insurance._open_display()
+            self.display = os.environ.get('DISPLAY')
+        return probe
+
+    def test_starts_one_when_a_window_is_wanted_and_none_is_there(self):
+        probe = self.open_display([False, False, False, True], display=None)
+        self.assertEqual(self.display, ':99')
+        self.subprocess.Popen.assert_called_once()
+        command = self.subprocess.Popen.call_args.args[0]
+        self.assertEqual(command[:2], ['Xvfb', ':99'])
+        self.assertIn('1280x800x24', command)
+        probe.assert_called_with('/tmp/.X11-unix/X99')
+        self.assertEqual(probe.call_count, 4)
+        self.assertEqual(self.time.sleep.call_count, 2)
+
+    def test_uses_the_one_that_is_already_there(self):
+        probe = self.open_display([True])
+        probe.assert_called_once_with('/tmp/.X11-unix/X99')
+        self.subprocess.Popen.assert_not_called()
+        self.time.sleep.assert_not_called()
+
+    def test_keeps_the_display_number_it_is_given(self):
+        probe = self.open_display([False, True], display=':7.0')
+        self.assertEqual(self.display, ':7.0')
+        probe.assert_called_with('/tmp/.X11-unix/X7')
+        self.assertEqual(self.subprocess.Popen.call_args.args[0][:2], ['Xvfb', ':7.0'])
+
+    def test_does_nothing_when_no_window_is_wanted_or_needed(self):
+        for options in (dict(headless=True), dict(platform='win32'),
+                        dict(platform='darwin'), dict(display='elsewhere:0')):
+            probe = self.open_display([], **options)
+            probe.assert_not_called()
+        self.subprocess.Popen.assert_not_called()
+
+    def test_stops_waiting_after_five_seconds(self):
+        probe = self.open_display([False] * 51)
+        self.subprocess.Popen.assert_called_once()
+        self.assertEqual(probe.call_count, 51)
+        self.assertEqual(self.time.sleep.call_count, 50)
+        self.time.sleep.assert_called_with(0.1)
+
+    def test_probe_tries_the_socket_file_then_the_abstract_socket(self):
+        tried = []
+
+        def refuse_files(address):
+            tried.append(address)
+            if not address.startswith('\0'):
+                raise ConnectionRefusedError
+
+        with patch('lookup.insurance.socket') as sockets:
+            sockets.socket.return_value.__enter__.return_value.connect = refuse_files
+            self.assertTrue(insurance._display_is_up('/tmp/.X11-unix/X99'))
+        self.assertEqual(tried, ['/tmp/.X11-unix/X99', '\0/tmp/.X11-unix/X99'])
+
+    def test_probe_says_no_when_nothing_answers(self):
+        with patch('lookup.insurance.socket') as sockets:
+            sockets.socket.return_value.__enter__.return_value.connect.side_effect = OSError
+            self.assertFalse(insurance._display_is_up('/tmp/.X11-unix/X99'))
+
+
+class ServerConfigTests(SimpleTestCase):
+    def test_one_process_so_checks_share_their_answers_and_their_turn(self):
+        config = runpy.run_path(str(settings.BASE_DIR / 'gunicorn.conf.py'))
+        self.assertEqual((config['workers'], config['worker_class']), (1, 'gthread'))
+        self.assertGreater(config['threads'], 1)
 
 
 class InsuranceRowTests(SimpleTestCase):
@@ -1116,7 +1220,7 @@ class InsuranceRowTests(SimpleTestCase):
             'retry': False,
         })
         for status, retry in (('unknown', True), ('busy', True),
-                              ('unavailable', False)):
+                              ('uninstalled', False), ('unavailable', False)):
             row = insurance.row({'status': status})
             self.assertEqual((row['ok'], row['retry']), (None, retry), status)
             self.assertEqual(row['notice'], f'({insurance.NOTICES[status]})')

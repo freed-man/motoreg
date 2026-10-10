@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock, Mock, patch
+from zoneinfo import ZoneInfo
 
 import requests
 from django.core.cache import cache
@@ -816,6 +817,7 @@ MIB_INSURED = (
     'Check another vehicle'
 )
 CHECKED = datetime(2026, 10, 10, 13, 32, tzinfo=timezone.utc)
+LONDON = ZoneInfo('Europe/London')
 
 
 class Clock:
@@ -829,13 +831,22 @@ class Clock:
 class InsuranceTestCase(SimpleTestCase):
     def setUp(self):
         insurance._answers.clear()
-        insurance._started.clear()
         insurance._pause.update(until=0.0, status='')
         self.clock = Clock()
-        for target, value in (('time', self.clock), ('available', lambda: True)):
-            patcher = patch(f'lookup.insurance.{target}', value)
+        self.uk_time(2026, 10, 10, 13, 0)
+        for target, value in (
+                ('lookup.insurance.time', self.clock),
+                ('lookup.insurance.available', lambda: True),
+                ('django.utils.timezone.now', self.utc_now)):
+            patcher = patch(target, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    def uk_time(self, *parts):
+        self.moment = datetime(*parts, tzinfo=LONDON)
+
+    def utc_now(self):
+        return self.moment.astimezone(timezone.utc)
 
 
 class InsuranceParseTests(SimpleTestCase):
@@ -868,18 +879,79 @@ class InsuranceParseTests(SimpleTestCase):
 
 @patch('lookup.insurance.lookup')
 class InsuranceCheckTests(InsuranceTestCase):
-    def test_answer_is_kept_for_an_hour(self, lookup):
+    def test_answer_is_reused_until_midnight(self, lookup):
         lookup.return_value = {'status': 'insured', 'vehicle': 'VOLKSWAGEN GOLF'}
+        self.uk_time(2026, 10, 10, 13, 0)
         first = insurance.check('AB12CDE')
         self.assertEqual(
             (first['status'], first['vehicle']), ('insured', 'VOLKSWAGEN GOLF'))
+        self.assertEqual(first['checked'], self.utc_now())
         self.assertIsNotNone(first['checked'].tzinfo)
-        self.clock.now += insurance.ANSWER_SECONDS - 1
+        self.uk_time(2026, 10, 10, 23, 59, 59)
         self.assertEqual(insurance.check('AB12CDE'), first)
         lookup.assert_called_once_with('AB12CDE')
-        self.clock.now += 2
+        self.uk_time(2026, 10, 11, 0, 0, 0)
+        second = insurance.check('AB12CDE')
+        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(second['checked'], self.utc_now())
+        self.assertEqual(insurance.row(second)['more'][-1], 'Checked at 00:00')
+        self.uk_time(2026, 10, 11, 23, 59, 59)
+        self.assertEqual(insurance.check('AB12CDE'), second)
+        self.assertEqual(lookup.call_count, 2)
+
+    def test_midnight_is_uk_midnight_in_winter_too(self, lookup):
+        lookup.return_value = {'status': 'uninsured'}
+        self.uk_time(2027, 1, 15, 13, 0)
+        insurance.check('AB12CDE')
+        self.uk_time(2027, 1, 15, 23, 59, 59)
+        insurance.check('AB12CDE')
+        self.assertEqual(lookup.call_count, 1)
+        self.uk_time(2027, 1, 16, 0, 0, 0)
         insurance.check('AB12CDE')
         self.assertEqual(lookup.call_count, 2)
+
+    def test_answer_from_just_before_midnight_ends_at_midnight(self, lookup):
+        lookup.return_value = {'status': 'insured', 'vehicle': ''}
+        self.uk_time(2026, 10, 10, 23, 59, 0)
+        insurance.check('AB12CDE')
+        self.uk_time(2026, 10, 10, 23, 59, 30)
+        insurance.check('AB12CDE')
+        self.assertEqual(lookup.call_count, 1)
+        self.uk_time(2026, 10, 11, 0, 0, 10)
+        insurance.check('AB12CDE')
+        self.assertEqual(lookup.call_count, 2)
+
+    def test_check_that_ends_after_midnight_belongs_to_the_new_day(self, lookup):
+        def slow(registration):
+            self.uk_time(2026, 10, 11, 0, 0, 5)
+            return {'status': 'insured', 'vehicle': ''}
+
+        lookup.side_effect = slow
+        self.uk_time(2026, 10, 10, 23, 59, 50)
+        answer = insurance.check('AB12CDE')
+        self.assertEqual(insurance.row(answer)['more'][-1], 'Checked at 00:00')
+        self.uk_time(2026, 10, 11, 22, 0)
+        self.assertEqual(insurance.check('AB12CDE'), answer)
+        self.assertEqual(lookup.call_count, 1)
+
+    def test_answers_from_earlier_days_are_dropped(self, lookup):
+        lookup.return_value = {'status': 'insured', 'vehicle': ''}
+        insurance.check('AB12CDE')
+        insurance.check('XY34ZZZ')
+        self.assertEqual(sorted(insurance._answers), ['AB12CDE', 'XY34ZZZ'])
+        self.uk_time(2026, 10, 11, 9, 0)
+        insurance.check('EF56GHJ')
+        self.assertEqual(sorted(insurance._answers), ['EF56GHJ'])
+
+    def test_no_limit_on_the_number_of_checks(self, lookup):
+        lookup.return_value = {'status': 'insured', 'vehicle': ''}
+        for number in range(200):
+            self.assertEqual(insurance.check(f'AB{number:03}CD')['status'], 'insured')
+        self.assertEqual(lookup.call_count, 200)
+        lookup.return_value = {'status': 'unknown'}
+        for _ in range(200):
+            self.assertEqual(insurance.check('XY34ZZZ'), {'status': 'unknown'})
+        self.assertEqual(lookup.call_count, 400)
 
     def test_each_registration_has_its_own_answer(self, lookup):
         lookup.side_effect = [{'status': 'insured', 'vehicle': ''},
@@ -914,39 +986,13 @@ class InsuranceCheckTests(InsuranceTestCase):
 
     def test_browser_that_will_not_start_is_left_alone_for_a_while(self, lookup):
         lookup.return_value = {'status': 'unavailable'}
-        for _ in range(insurance.MAX_PER_DAY + 1):
+        for _ in range(50):
             self.assertEqual(insurance.check('AB12CDE'), {'status': 'unavailable'})
         self.assertEqual(lookup.call_count, 1)
         lookup.return_value = {'status': 'uninsured'}
         self.clock.now += insurance.PAUSES['unavailable'] + 1
         self.assertEqual(insurance.check('AB12CDE')['status'], 'uninsured')
         self.assertEqual(lookup.call_count, 2)
-
-    def test_hourly_cap(self, lookup):
-        lookup.return_value = {'status': 'unknown'}
-        for number in range(insurance.MAX_PER_HOUR):
-            self.assertEqual(insurance.check(f'AB{number:02}CDE')['status'], 'unknown')
-        self.assertEqual(insurance.check('XY34ZZZ'), {'status': 'capped'})
-        self.assertEqual(lookup.call_count, insurance.MAX_PER_HOUR)
-        self.clock.now += 60 * 60
-        self.assertEqual(insurance.check('XY34ZZZ')['status'], 'unknown')
-
-    def test_daily_cap(self, lookup):
-        lookup.return_value = {'status': 'unknown'}
-        for number in range(insurance.MAX_PER_DAY):
-            self.clock.now += 20 * 60
-            self.assertEqual(insurance.check(f'AB{number:02}CDE')['status'], 'unknown')
-        self.clock.now += 61 * 60
-        self.assertEqual(insurance.check('XY34ZZZ'), {'status': 'capped'})
-        self.clock.now += 24 * 60 * 60
-        self.assertEqual(insurance.check('XY34ZZZ')['status'], 'unknown')
-
-    def test_kept_answers_do_not_use_up_the_cap(self, lookup):
-        lookup.return_value = {'status': 'insured', 'vehicle': ''}
-        for _ in range(insurance.MAX_PER_DAY * 2):
-            self.assertEqual(insurance.check('AB12CDE')['status'], 'insured')
-        self.assertEqual(lookup.call_count, 1)
-        self.assertEqual(len(insurance._started), 1)
 
     def test_busy_while_another_check_holds_the_browser(self, lookup):
         with patch('lookup.insurance.TURN_SECONDS', 0.01):
@@ -1070,7 +1116,7 @@ class InsuranceRowTests(SimpleTestCase):
             'retry': False,
         })
         for status, retry in (('unknown', True), ('busy', True),
-                              ('capped', False), ('unavailable', False)):
+                              ('unavailable', False)):
             row = insurance.row({'status': status})
             self.assertEqual((row['ok'], row['retry']), (None, retry), status)
             self.assertEqual(row['notice'], f'({insurance.NOTICES[status]})')

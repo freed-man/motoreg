@@ -3,7 +3,6 @@ import os
 import re
 import threading
 import time
-from collections import deque
 from importlib.util import find_spec
 
 from django.utils import timezone
@@ -14,15 +13,11 @@ MIB_PAGE = 'https://enquiry.navigate.mib.org.uk/checkyourvehicle'
 MIB_URL = os.environ.get('MIB_URL', MIB_PAGE)
 HEADLESS = os.environ.get('MIB_HEADLESS', 'true').strip().lower() != 'false'
 
-ANSWER_SECONDS = 60 * 60
 PAUSES = {'limit': 30 * 60, 'unavailable': 5 * 60}
 TURN_SECONDS = 20
-MAX_PER_HOUR = 10
-MAX_PER_DAY = 30
 
 NOTICES = {
     'limit': "MIB's search limit has been reached, try again later",
-    'capped': 'enough checks from this site for now, try again later',
     'busy': 'another check is running, try again in a minute',
     'unknown': "couldn't check right now",
     'unavailable': 'no browser on this server to check with',
@@ -32,7 +27,6 @@ RETRY = ('busy', 'unknown')
 _one_at_a_time = threading.Lock()
 _memory = threading.Lock()
 _answers = {}
-_started = deque()
 _pause = {'until': 0.0, 'status': ''}
 
 _SUBMIT_ENABLED_JS = """() => {
@@ -73,9 +67,9 @@ def check(registration):
         answer = _remembered(registration)
         if answer:
             return answer
-        refused = _refused()
-        if refused:
-            return {'status': refused}
+        paused = _paused()
+        if paused:
+            return {'status': paused}
         result = lookup(registration)
     finally:
         _one_at_a_time.release()
@@ -124,41 +118,36 @@ def lookup(registration):
 
 
 def _remembered(registration):
+    today = timezone.localdate()
     with _memory:
         kept = _answers.get(registration)
-        if kept and kept['until'] > time.monotonic():
+        if kept and kept['day'] == today:
             return kept['answer']
         _answers.pop(registration, None)
     return None
 
 
-def _refused():
-    now = time.monotonic()
+def _paused():
     with _memory:
-        if now < _pause['until']:
+        if time.monotonic() < _pause['until']:
             return _pause['status']
-        while _started and now - _started[0] > 24 * 60 * 60:
-            _started.popleft()
-        last_hour = sum(1 for began in _started if now - began < 60 * 60)
-        if last_hour >= MAX_PER_HOUR or len(_started) >= MAX_PER_DAY:
-            return 'capped'
-        _started.append(now)
     return ''
 
 
 def _remember(registration, result):
-    now = time.monotonic()
     status = result['status']
     with _memory:
         if status in ('insured', 'uninsured'):
-            result = dict(result, checked=timezone.now())
+            now = timezone.now()
+            today = timezone.localdate(now)
+            result = dict(result, checked=now)
             for old in [reg for reg, kept in _answers.items()
-                        if kept['until'] <= now]:
+                        if kept['day'] != today]:
                 del _answers[old]
-            _answers[registration] = {
-                'until': now + ANSWER_SECONDS, 'answer': result}
+            _answers[registration] = {'day': today, 'answer': result}
         elif status in PAUSES:
-            _pause.update(until=now + PAUSES[status], status=status)
+            _pause.update(
+                until=time.monotonic() + PAUSES[status], status=status)
     return result
 
 
